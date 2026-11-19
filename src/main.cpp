@@ -1,7 +1,8 @@
 #include "scanner.h"
 #include "chunk_engine.h"
 #include "chunk_config.h"
-
+#include "compression_engine.h"
+#include "reconstruction_engine.h"
 #include <chrono>
 #include <fstream>
 #include <filesystem>
@@ -109,66 +110,153 @@ static void writeDirectory(std::ofstream& output, const DirectoryNode& directory
     output << "}";
 }
 
-static void writeChunkManifestJson(std::ofstream& out,
-                                   const ProjectChunkResult& result,
-                                   const EngineConfig& config,
-                                   const std::string& rootPath) {
+static void writeChunkManifestJson(
+    std::ofstream& out,
+    const ProjectChunkResult& result,
+    const EngineConfig& config,
+    const std::string& rootPath,
+    const CompressionResult& compression,
+    const std::string& payloadFilename)
+{
     out << "{\n";
+
     out << "  \"rootPath\": \"" << jsonEscape(rootPath) << "\",\n";
-    out << "  \"selectedStrategy\": \"" << strategy_to_string(config.strategy) << "\",\n";
-    out << "  \"summary\": {\n";
-    out << "    \"totalFiles\": " << result.metrics.totalFilesProcessed << ",\n";
-    out << "    \"totalBytes\": " << result.metrics.totalBytesProcessed << ",\n";
-    out << "    \"totalChunks\": " << result.metrics.totalChunksGenerated << ",\n";
-    out << "    \"uniqueFingerprints\": " << result.metrics.uniqueFingerprints << ",\n";
-    out << "    \"deduplicatedBytes\": " << result.metrics.deduplicatedBytes << ",\n";
-    out << "    \"internalDedupRatio\": " << std::fixed << std::setprecision(4) 
-        << result.metrics.internalDedupRatio << ",\n";
-    out << "    \"totalChunkingTimeMs\": " << std::fixed << std::setprecision(2) 
-        << result.metrics.totalChunkingTimeMs << ",\n";
-    out << "    \"totalFingerprintingTimeMs\": " << std::fixed << std::setprecision(2) 
-        << result.metrics.totalFingerprintingTimeMs << ",\n";
-    out << "    \"totalExecutionTimeMs\": " << std::fixed << std::setprecision(2) 
-        << result.metrics.totalExecutionTimeMs << ",\n";
-    out << "    \"overallThroughputMBps\": " << std::fixed << std::setprecision(2) 
-        << result.metrics.overallThroughputMBps << ",\n";
-    out << "    \"estimatedMetadataBytes\": " << result.metrics.totalEstimatedMetadataBytes << "\n";
+    out << "  \"selectedStrategy\": \""
+        << strategy_to_string(config.strategy) << "\",\n";
+
+    // Chunking configuration
+    out << "  \"chunking\": {\n";
+    out << "    \"fixedChunkSize\": "
+        << config.fixedConfig.chunkSize << ",\n";
+    out << "    \"cdcMinChunkSize\": "
+        << config.cdcConfig.minChunkSize << ",\n";
+    out << "    \"cdcTargetChunkSize\": "
+        << config.cdcConfig.targetChunkSize << ",\n";
+    out << "    \"cdcMaxChunkSize\": "
+        << config.cdcConfig.maxChunkSize << "\n";
     out << "  },\n";
 
-    out << "  \"files\": [\n";
-    for (size_t i = 0; i < result.files.size(); ++i) {
-        const auto& f = result.files[i];
-        out << "    {\n";
-        out << "      \"path\": \"" << jsonEscape(f.relativePath) << "\",\n";
-        out << "      \"size\": " << f.metrics.fileSize << ",\n";
-        out << "      \"strategy\": \"" << f.metrics.selectedStrategy << "\",\n";
-        out << "      \"reason\": \"" << jsonEscape(f.decision.reason) << "\",\n";
-        out << "      \"chunkCount\": " << f.chunks.size() << ",\n";
-        out << "      \"avgChunkSize\": " << std::fixed << std::setprecision(1) << f.metrics.avgChunkSize << ",\n";
-        out << "      \"minChunkSize\": " << f.metrics.minChunkSize << ",\n";
-        out << "      \"maxChunkSize\": " << f.metrics.maxChunkSize << ",\n";
-        out << "      \"totalTimeMs\": " << std::fixed << std::setprecision(3) << f.metrics.totalDurationMs << ",\n";
-        out << "      \"chunks\": [\n";
-        for (size_t c = 0; c < f.chunks.size(); ++c) {
-            const auto& chunk = f.chunks[c];
-            out << "        {\"seq\": " << chunk.sequenceNumber
-                << ", \"offset\": " << chunk.offset
-                << ", \"length\": " << chunk.length
-                << ", \"fingerprint\": \"" << chunk.fingerprint << "\""
-                << ", \"crc32\": " << chunk.crc32
-                << ", \"algorithm\": \"" << chunk.algorithm << "\"}";
-            if (c + 1 < f.chunks.size()) out << ",";
-            out << "\n";
+    // Compression information
+    out << "  \"selectiveCompression\": {\n";
+    out << "    \"payloadFile\": \""
+        << jsonEscape(payloadFilename) << "\",\n";
+    out << "    \"payloadChunks\": [\n";
+
+    for (size_t i = 0; i < compression.payloadChunks.size(); ++i) {
+        const auto& chunk = compression.payloadChunks[i];
+
+        out << "      {\n";
+        out << "        \"fingerprint\": \""
+            << jsonEscape(chunk.metadata.fingerprint) << "\",\n";
+        out << "        \"originalSize\": "
+            << chunk.metadata.length << ",\n";
+        out << "        \"payloadOffset\": "
+            << chunk.payloadOffset << ",\n";
+        out << "        \"storedSize\": "
+            << chunk.storedSize << ",\n";
+        out << "        \"crc32\": "
+            << chunk.metadata.crc32 << ",\n";
+        out << "        \"codec\": \""
+            << jsonEscape(chunk.codec) << "\"\n";
+        out << "      }";
+
+        if (i + 1 < compression.payloadChunks.size()) {
+            out << ",";
         }
-        out << "      ]\n";
-        out << "    }";
-        if (i + 1 < result.files.size()) out << ",";
         out << "\n";
     }
+
+    out << "    ]\n";
+    out << "  },\n";
+
+    // Existing chunking summary
+    out << "  \"summary\": {\n";
+    out << "    \"totalFiles\": "
+        << result.metrics.totalFilesProcessed << ",\n";
+    out << "    \"totalBytes\": "
+        << result.metrics.totalBytesProcessed << ",\n";
+    out << "    \"totalChunks\": "
+        << result.metrics.totalChunksGenerated << ",\n";
+    out << "    \"uniqueFingerprints\": "
+        << result.metrics.uniqueFingerprints << ",\n";
+    out << "    \"deduplicatedBytes\": "
+        << result.metrics.deduplicatedBytes << ",\n";
+    out << "    \"internalDedupRatio\": "
+        << std::fixed << std::setprecision(4)
+        << result.metrics.internalDedupRatio << ",\n";
+    out << "    \"totalChunkingTimeMs\": "
+        << std::fixed << std::setprecision(2)
+        << result.metrics.totalChunkingTimeMs << ",\n";
+    out << "    \"totalFingerprintingTimeMs\": "
+        << result.metrics.totalFingerprintingTimeMs << ",\n";
+    out << "    \"totalExecutionTimeMs\": "
+        << result.metrics.totalExecutionTimeMs << ",\n";
+    out << "    \"overallThroughputMBps\": "
+        << result.metrics.overallThroughputMBps << ",\n";
+    out << "    \"estimatedMetadataBytes\": "
+        << result.metrics.totalEstimatedMetadataBytes << "\n";
+    out << "  },\n";
+
+    // File reconstruction recipes
+    out << "  \"files\": [\n";
+
+    for (size_t i = 0; i < result.files.size(); ++i) {
+        const auto& f = result.files[i];
+
+        out << "    {\n";
+        out << "      \"path\": \""
+            << jsonEscape(f.relativePath) << "\",\n";
+        out << "      \"size\": " << f.metrics.fileSize << ",\n";
+        out << "      \"strategy\": \""
+            << f.metrics.selectedStrategy << "\",\n";
+        out << "      \"reason\": \""
+            << jsonEscape(f.decision.reason) << "\",\n";
+        out << "      \"chunkCount\": "
+            << f.chunks.size() << ",\n";
+        out << "      \"avgChunkSize\": "
+            << std::fixed << std::setprecision(1)
+            << f.metrics.avgChunkSize << ",\n";
+        out << "      \"minChunkSize\": "
+            << f.metrics.minChunkSize << ",\n";
+        out << "      \"maxChunkSize\": "
+            << f.metrics.maxChunkSize << ",\n";
+        out << "      \"totalTimeMs\": "
+            << std::fixed << std::setprecision(3)
+            << f.metrics.totalDurationMs << ",\n";
+
+        out << "      \"chunks\": [\n";
+
+        for (size_t c = 0; c < f.chunks.size(); ++c) {
+            const auto& chunk = f.chunks[c];
+
+            out << "        {"
+                << "\"seq\": " << chunk.sequenceNumber
+                << ", \"offset\": " << chunk.offset
+                << ", \"length\": " << chunk.length
+                << ", \"fingerprint\": \""
+                << jsonEscape(chunk.fingerprint) << "\""
+                << ", \"crc32\": " << chunk.crc32
+                << ", \"algorithm\": \""
+                << jsonEscape(chunk.algorithm) << "\"}";
+
+            if (c + 1 < f.chunks.size()) {
+                out << ",";
+            }
+            out << "\n";
+        }
+
+        out << "      ]\n";
+        out << "    }";
+
+        if (i + 1 < result.files.size()) {
+            out << ",";
+        }
+        out << "\n";
+    }
+
     out << "  ]\n";
     out << "}\n";
 }
-
 static void printUsage(const char* progName) {
     std::cout << "RetroTransfer - Project Scanner and Adaptive Chunking Engine\n";
     std::cout << "Usage:\n";
@@ -260,7 +348,7 @@ static void runBenchmark(const DirectoryNode& directoryTree,
     std::cout << "============================================================\n\n";
 }
 
-int main(int argc, char* argv[]) {
+int runBackend(int argc, char* argv[]) {
     std::string path = ".";
     std::string outputName = "scan.json";
     bool enableChunking = true;
@@ -380,22 +468,83 @@ int main(int argc, char* argv[]) {
 
         ChunkEngine engine(config);
         ProjectChunkResult chunkResult = engine.processScannedProject(directoryTree, path);
+// ------------------------------------------
+// COMPRESSION ENGINE
+// ------------------------------------------
 
+std::cout << "\n--- Starting Compression Engine ---\n";
+
+ProjectChunkResult baseline;
+CompressionResult compressionResult;
+CompressionEngine compressionEngine;
+
+std::string compressionError;
+
+fs::path payloadFilename =
+    outputPath.stem().string() + "_chunks.rtpk";
+
+fs::path payloadPath = collectionFolder / payloadFilename;
+
+bool compressionSuccess = compressionEngine.compressMissingChunks(
+    chunkResult,
+    baseline,
+    payloadPath.string(),
+    compressionResult,
+    compressionError
+);
+
+if (!compressionSuccess) {
+    std::cerr << "Compression failed: "
+              << compressionError << "\n";
+    return 1;
+}
+
+std::cout << "Compression completed successfully!\n";
+std::cout << "Total chunks       : "
+          << compressionResult.metrics.totalChunks << "\n";
+std::cout << "Huffman chunks     : "
+          << compressionResult.metrics.huffmanChunks << "\n";
+std::cout << "Raw chunks         : "
+          << compressionResult.metrics.storedRawChunks << "\n";
+std::cout << "Payload size       : "
+          << compressionResult.metrics.payloadBytes << " bytes\n";
+std::cout << "-----------------------------------\n";
+       
         // Save chunk manifest
-        fs::path chunkOutFilename = outputPath.stem().string() + "_chunks.json";
-        fs::path chunkOutputPath = collectionFolder / chunkOutFilename;
+        fs::path chunkOutFilename =
+            outputPath.stem().string() + "_chunks.json";
+
+        fs::path chunkOutputPath =
+            collectionFolder / chunkOutFilename;
+
         std::ofstream chunkOut(chunkOutputPath);
+
         if (!chunkOut) {
-            std::cerr << "Error: Could not create chunk manifest: " << chunkOutputPath << "\n";
+            std::cerr << "Error: Could not create chunk manifest: "
+                      << chunkOutputPath << "\n";
             return 1;
         }
-        writeChunkManifestJson(chunkOut, chunkResult, config, path);
+
+        writeChunkManifestJson(
+            chunkOut,
+            chunkResult,
+            config,
+            path,
+            compressionResult,
+            payloadFilename.string()
+        );
+
         chunkOut.close();
+
         if (!chunkOut) {
-            std::cerr << "Error: Failed while writing chunk manifest: " << chunkOutputPath << "\n";
+            std::cerr << "Error: Failed while writing chunk manifest: "
+                      << chunkOutputPath << "\n";
             return 1;
         }
-        std::cout << "Saved chunk manifest to " << chunkOutputPath << "\n";
+
+        std::cout << "Saved chunk manifest to "
+                  << chunkOutputPath << "\n";
+
 
         std::cout << "\n--- Chunking Engine Summary ---\n";
         std::cout << "Files processed    : " << chunkResult.metrics.totalFilesProcessed << "\n";
@@ -416,11 +565,248 @@ int main(int argc, char* argv[]) {
         std::cout << "Overall throughput : " << std::fixed << std::setprecision(2)
                   << chunkResult.metrics.overallThroughputMBps << " MB/s\n";
         std::cout << "--------------------------------\n";
+                // ------------------------------------------
+        // RECONSTRUCTION ENGINE
+        // ------------------------------------------
 
+        std::cout << "\n--- Starting Reconstruction Engine ---\n";
+
+        ReconstructionEngine reconstructionEngine;
+        ReconstructionResult reconstructionResult;
+        std::string reconstructionError;
+
+        fs::path reconstructedFolder = "reconstructed_output";
+
+        bool reconstructionSuccess = reconstructionEngine.reconstruct(
+            chunkOutputPath.string(),
+            payloadPath.string(),
+            reconstructedFolder.string(),
+            reconstructionResult,
+            reconstructionError
+        );
+
+        if (!reconstructionSuccess) {
+            std::cerr << "Reconstruction failed: "
+                      << reconstructionError << "\n";
+            return 1;
+        }
+
+        std::cout << "Reconstruction completed successfully!\n";
+        std::cout << "Files written  : "
+                  << reconstructionResult.filesWritten << "\n";
+        std::cout << "Chunks written : "
+                  << reconstructionResult.chunksWritten << "\n";
+        std::cout << "Chunks reused  : "
+                  << reconstructionResult.chunksReused << "\n";
+        std::cout << "Output folder  : "
+                  << reconstructedFolder << "\n";
+        std::cout << "-----------------------------------\n";
         if (benchmarkMode) {
             runBenchmark(directoryTree, path, config);
         }
     }
 
     return 0;
+} 
+
+int executeBackend(const std::vector<std::string>& arguments)
+{
+    std::vector<char*> argv;
+
+    for (const auto& argument : arguments) {
+        argv.push_back(const_cast<char*>(argument.c_str()));
+    }
+
+    return runBackend(
+        static_cast<int>(argv.size()),
+        argv.data()
+    );
+}
+
+void showMainMenu()
+{
+    std::cout << "\n";
+    std::cout << "============================================\n";
+    std::cout << "              RETRO TRANSFER                \n";
+    std::cout << "          LOCAL FILE TRANSFER SYSTEM        \n";
+    std::cout << "============================================\n";
+    std::cout << "                 MAIN MENU                  \n";
+    std::cout << "--------------------------------------------\n";
+    std::cout << "  1. Start New Transfer\n";
+    std::cout << "  2. Configure Chunking Strategy\n";
+    std::cout << "  3. View Collection Files\n";
+    std::cout << "  4. Project Information\n";
+    std::cout << "  0. Exit\n";
+    std::cout << "--------------------------------------------\n";
+    std::cout << "Enter your choice: ";
+}
+
+void viewCollection()
+{
+    fs::path collectionPath = "collection";
+
+    if (!fs::exists(collectionPath)) {
+        std::cout << "\nNo collection folder found yet.\n";
+        return;
+    }
+
+    std::cout << "\n========== COLLECTION FILES ==========\n";
+
+    for (const auto& entry : fs::directory_iterator(collectionPath)) {
+        if (entry.is_regular_file()) {
+            std::cout << entry.path().filename()
+                      << "  (" << entry.file_size() << " bytes)\n";
+        }
+    }
+
+    std::cout << "======================================\n";
+}
+
+
+int main(int argc, char* argv[])
+{
+    // If arguments are supplied, run backend directly for the GUI.
+    if (argc > 1) {
+        return runBackend(argc, argv);
+    }
+
+    // Otherwise, launch the normal terminal menu.
+    std::string selectedStrategy = "adaptive";
+
+    while (true)
+    {
+        showMainMenu();
+
+        int choice;
+
+        if (!(std::cin >> choice)) {
+            std::cin.clear();
+            std::cin.ignore(
+                std::numeric_limits<std::streamsize>::max(),
+                '\n'
+            );
+
+            std::cout << "\nInvalid input. Enter a number.\n";
+            continue;
+        }
+
+        std::cin.ignore(
+            std::numeric_limits<std::streamsize>::max(),
+            '\n'
+        );
+
+        switch (choice)
+        {
+            case 1:
+            {
+                std::string folderPath;
+
+                std::cout << "\nEnter folder path: ";
+                std::getline(std::cin, folderPath);
+
+                // Remove surrounding quotes if pasted from Windows Explorer.
+                if (folderPath.size() >= 2 &&
+                    folderPath.front() == '"' &&
+                    folderPath.back() == '"') {
+                    folderPath = folderPath.substr(
+                        1, folderPath.size() - 2
+                    );
+                }
+
+                if (folderPath.empty() ||
+                    !fs::exists(folderPath) ||
+                    !fs::is_directory(folderPath)) {
+                    std::cout << "\nInvalid folder path!\n";
+                    break;
+                }
+
+                std::cout << "\nStarting RetroTransfer...\n";
+
+                executeBackend({
+                    "RetroTransfer",
+                    folderPath,
+                    "--strategy",
+                    selectedStrategy
+                });
+
+                std::cout << "\nReturning to main menu...\n";
+                break;
+            }
+
+            case 2:
+            {
+                std::cout << "\n===== CHUNKING STRATEGY =====\n";
+                std::cout << "1. Adaptive\n";
+                std::cout << "2. Fixed\n";
+                std::cout << "3. CDC\n";
+                std::cout << "Enter choice: ";
+
+                int strategyChoice;
+
+                if (!(std::cin >> strategyChoice)) {
+                    std::cin.clear();
+                    std::cin.ignore(
+                        std::numeric_limits<std::streamsize>::max(),
+                        '\n'
+                    );
+                    std::cout << "Invalid input.\n";
+                    break;
+                }
+
+                std::cin.ignore(
+                    std::numeric_limits<std::streamsize>::max(),
+                    '\n'
+                );
+
+                switch (strategyChoice)
+                {
+                    case 1:
+                        selectedStrategy = "adaptive";
+                        break;
+
+                    case 2:
+                        selectedStrategy = "fixed";
+                        break;
+
+                    case 3:
+                        selectedStrategy = "cdc";
+                        break;
+
+                    default:
+                        std::cout << "Invalid strategy choice.\n";
+                        continue;
+                }
+
+                std::cout << "Strategy selected: "
+                          << selectedStrategy << "\n";
+                break;
+            }
+
+            case 3:
+                viewCollection();
+                break;
+
+            case 4:
+                std::cout << "\n========== PROJECT INFORMATION ==========\n";
+                std::cout << "Project: RetroTransfer\n";
+                std::cout << "Version: 1.0\n";
+                std::cout << "Language: C++17 and C\n";
+                std::cout << "Modules:\n";
+                std::cout << "- Project Scanner\n";
+                std::cout << "- Chunking Engine\n";
+                std::cout << "- Fingerprinting\n";
+                std::cout << "- Compression Engine\n";
+                std::cout << "- Reconstruction Engine\n";
+                std::cout << "Networking: Planned for a future version\n";
+                std::cout << "=========================================\n";
+                break;
+
+            case 0:
+                std::cout << "\nThank you for using RetroTransfer!\n";
+                return 0;
+
+            default:
+                std::cout << "\nInvalid choice. Try again.\n";
+        }
+    }
 }
