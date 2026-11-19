@@ -11,10 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(include)
 
-# ------------------------------------------
 # CORE BACKEND SOURCES
-# ------------------------------------------
-
 set(RETRO_CORE_SOURCES
     src/scanner.cpp
     src/fingerprint.cpp
@@ -31,27 +28,18 @@ set(RETRO_CORE_SOURCES
     src/reconstruction_engine.cpp
 )
 
-# ------------------------------------------
 # EXISTING TERMINAL APPLICATION
-# ------------------------------------------
-
 add_executable(RetroTransfer
     src/main.cpp
     ${RETRO_CORE_SOURCES}
 )
 
-# ------------------------------------------
 # EXISTING SETUP CLI
-# ------------------------------------------
-
 add_executable(RetroTransferSetupCLI
     examples/transfer_setup_cli.cpp
 )
 
-# ------------------------------------------
 # EXISTING TEST APPLICATION
-# ------------------------------------------
-
 enable_testing()
 
 add_executable(test_chunking
@@ -71,10 +59,7 @@ if(MINGW)
         PROPERTY LINK_FLAGS " -static")
 endif()
 
-# ------------------------------------------
 # QT 6 GUI APPLICATION
-# ------------------------------------------
-
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
 
 add_executable(RetroTransferGUI
@@ -87,4 +72,5 @@ add_executable(RetroTransferGUI
 target_link_libraries(RetroTransferGUI
     PRIVATE Qt6::Widgets
 )
+
 add_dependencies(RetroTransferGUI RetroTransfer)
