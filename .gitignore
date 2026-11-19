@@ -1,12 +1,17 @@
+
 build/
-build-mingw/
-build-ucrt64/
+build-*/
 *.exe
 *.json
+*.rtpack
 collection/
 .vscode/
+
 # Local test data and generated output
 retrotransfer_test/
 sample_data/
 reconstructed_output/
 main_backend_backup.cpp
+
+# Information file
+info.txt
