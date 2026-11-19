@@ -235,15 +235,15 @@ static void writeChunkManifestJson(std::ofstream& out,
     out << "    \"totalChunks\": " << result.metrics.totalChunksGenerated << ",\n";
     out << "    \"uniqueFingerprints\": " << result.metrics.uniqueFingerprints << ",\n";
     out << "    \"deduplicatedBytes\": " << result.metrics.deduplicatedBytes << ",\n";
-    out << "    \"internalDedupRatio\": " << std::fixed << std::setprecision(4) 
+    out << "    \"internalDedupRatio\": " << std::fixed << std::setprecision(4)
         << result.metrics.internalDedupRatio << ",\n";
-    out << "    \"totalChunkingTimeMs\": " << std::fixed << std::setprecision(2) 
+    out << "    \"totalChunkingTimeMs\": " << std::fixed << std::setprecision(2)
         << result.metrics.totalChunkingTimeMs << ",\n";
-    out << "    \"totalFingerprintingTimeMs\": " << std::fixed << std::setprecision(2) 
+    out << "    \"totalFingerprintingTimeMs\": " << std::fixed << std::setprecision(2)
         << result.metrics.totalFingerprintingTimeMs << ",\n";
-    out << "    \"totalExecutionTimeMs\": " << std::fixed << std::setprecision(2) 
+    out << "    \"totalExecutionTimeMs\": " << std::fixed << std::setprecision(2)
         << result.metrics.totalExecutionTimeMs << ",\n";
-    out << "    \"overallThroughputMBps\": " << std::fixed << std::setprecision(2) 
+    out << "    \"overallThroughputMBps\": " << std::fixed << std::setprecision(2)
         << result.metrics.overallThroughputMBps << ",\n";
     out << "    \"estimatedMetadataBytes\": " << result.metrics.totalEstimatedMetadataBytes << "\n";
     out << "  },\n";
@@ -422,7 +422,7 @@ static void runBenchmark(const DirectoryNode& directoryTree,
     std::cout << "============================================================\n\n";
 }
 
-int main(int argc, char* argv[]) {
+int runBackend(int argc, char* argv[]){
     if (argc > 1 && std::string(argv[1]) == "--reconstruct") {
         if (argc < 3 || std::string(argv[2]).rfind("--", 0) == 0) {
             std::cerr << "Error: --reconstruct requires a chunk manifest path.\n";
@@ -789,4 +789,192 @@ int main(int argc, char* argv[]) {
     }
 
     return 0;
+}
+
+int executeBackend(const std::vector<std::string>& arguments)
+{
+    std::vector<char*> argv;
+
+    for (const auto& argument : arguments) {
+        argv.push_back(const_cast<char*>(argument.c_str()));
+    }
+
+    return runBackend(
+        static_cast<int>(argv.size()),
+        argv.data()
+    );
+}
+
+void showMainMenu()
+{
+    std::cout << "\n";
+    std::cout << "============================================\n";
+    std::cout << "              RETRO TRANSFER                \n";
+    std::cout << "          LOCAL FILE TRANSFER SYSTEM        \n";
+    std::cout << "============================================\n";
+    std::cout << "                 MAIN MENU                  \n";
+    std::cout << "--------------------------------------------\n";
+    std::cout << "  1. Start New Transfer\n";
+    std::cout << "  2. Configure Chunking Strategy\n";
+    std::cout << "  3. View Collection Files\n";
+    std::cout << "  4. Project Information\n";
+    std::cout << "  0. Exit\n";
+    std::cout << "--------------------------------------------\n";
+    std::cout << "Enter your choice: ";
+}
+
+void viewCollection()
+{
+    fs::path collectionPath = "collection";
+
+    if (!fs::exists(collectionPath)) {
+        std::cout << "\nNo collection folder found yet.\n";
+        return;
+    }
+
+    std::cout << "\n========== COLLECTION FILES ==========\n";
+
+    for (const auto& entry : fs::directory_iterator(collectionPath)) {
+        if (entry.is_regular_file()) {
+            std::cout << entry.path().filename()
+                      << "  (" << entry.file_size() << " bytes)\n";
+        }
+    }
+
+    std::cout << "======================================\n";
+}
+
+int main(int argc, char* argv[])
+{
+    // GUI launches backend with arguments; terminal launches menu without args.
+    if (argc > 1) {
+        return runBackend(argc, argv);
+    }
+
+    std::string selectedStrategy = "adaptive";
+
+    while (true)
+    {
+        showMainMenu();
+
+        int choice;
+
+        if (!(std::cin >> choice)) {
+            std::cin.clear();
+            std::cin.ignore(
+                std::numeric_limits<std::streamsize>::max(),
+                '\n'
+            );
+
+            std::cout << "\nInvalid input. Enter a number.\n";
+            continue;
+        }
+
+        std::cin.ignore(
+            std::numeric_limits<std::streamsize>::max(),
+            '\n'
+        );
+
+        switch (choice)
+        {
+            case 1:
+            {
+                std::string folderPath;
+
+                std::cout << "\nEnter folder path: ";
+                std::getline(std::cin, folderPath);
+
+                if (folderPath.size() >= 2 &&
+                    folderPath.front() == '"' &&
+                    folderPath.back() == '"') {
+                    folderPath = folderPath.substr(1, folderPath.size() - 2);
+                }
+
+                if (folderPath.empty() ||
+                    !fs::exists(folderPath) ||
+                    !fs::is_directory(folderPath)) {
+                    std::cout << "\nInvalid folder path!\n";
+                    break;
+                }
+
+                std::cout << "\nStarting RetroTransfer...\n";
+
+                executeBackend({
+                    "RetroTransfer",
+                    folderPath,
+                    "--strategy",
+                    selectedStrategy
+                });
+
+                std::cout << "\nReturning to main menu...\n";
+                break;
+            }
+
+            case 2:
+            {
+                std::cout << "\n===== CHUNKING STRATEGY =====\n";
+                std::cout << "1. Adaptive\n";
+                std::cout << "2. Fixed\n";
+                std::cout << "3. CDC\n";
+                std::cout << "Enter choice: ";
+
+                int strategyChoice;
+
+                if (!(std::cin >> strategyChoice)) {
+                    std::cin.clear();
+                    std::cin.ignore(
+                        std::numeric_limits<std::streamsize>::max(),
+                        '\n'
+                    );
+                    std::cout << "Invalid input.\n";
+                    break;
+                }
+
+                std::cin.ignore(
+                    std::numeric_limits<std::streamsize>::max(),
+                    '\n'
+                );
+
+                switch (strategyChoice)
+                {
+                    case 1: selectedStrategy = "adaptive"; break;
+                    case 2: selectedStrategy = "fixed"; break;
+                    case 3: selectedStrategy = "cdc"; break;
+                    default:
+                        std::cout << "Invalid strategy choice.\n";
+                        continue;
+                }
+
+                std::cout << "Strategy selected: "
+                          << selectedStrategy << "\n";
+                break;
+            }
+
+            case 3:
+                viewCollection();
+                break;
+
+            case 4:
+                std::cout << "\n========== PROJECT INFORMATION ==========\n";
+                std::cout << "Project: RetroTransfer\n";
+                std::cout << "Version: 1.0\n";
+                std::cout << "Language: C++17 and C\n";
+                std::cout << "Modules:\n";
+                std::cout << "- Project Scanner\n";
+                std::cout << "- Chunking Engine\n";
+                std::cout << "- Fingerprinting\n";
+                std::cout << "- Compression Engine\n";
+                std::cout << "- Reconstruction Engine\n";
+                std::cout << "Networking: Planned for a future version\n";
+                std::cout << "=========================================\n";
+                break;
+
+            case 0:
+                std::cout << "\nThank you for using RetroTransfer!\n";
+                return 0;
+
+            default:
+                std::cout << "\nInvalid choice. Try again.\n";
+        }
+    }
 }

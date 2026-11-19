@@ -1,17 +1,19 @@
+
 cmake_minimum_required(VERSION 3.10)
 
 project(RetroTransfer VERSION 1.0 LANGUAGES C CXX)
 
 set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED True)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
-if(MINGW)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -static")
-endif()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(include)
+
+# ------------------------------------------
+# CORE BACKEND SOURCES
+# ------------------------------------------
 
 set(RETRO_CORE_SOURCES
     src/scanner.cpp
@@ -26,15 +28,28 @@ set(RETRO_CORE_SOURCES
     src/chunk_engine.cpp
 )
 
-add_executable(RetroTransfer 
-    src/main.cpp 
+# ------------------------------------------
+# TERMINAL APPLICATION
+# ------------------------------------------
+
+add_executable(RetroTransfer
+    src/main.cpp
     ${RETRO_CORE_SOURCES}
 )
+
+# ------------------------------------------
+# TRANSFER SETUP CLI
+# ------------------------------------------
 
 add_executable(RetroTransferSetupCLI
     examples/transfer_setup_cli.cpp
 )
+
 add_dependencies(RetroTransferSetupCLI RetroTransfer)
+
+# ------------------------------------------
+# TEST APPLICATION
+# ------------------------------------------
 
 enable_testing()
 
@@ -44,3 +59,34 @@ add_executable(test_chunking
 )
 
 add_test(NAME ChunkingEngineTests COMMAND test_chunking)
+
+# Preserve static linking for CLI and test targets.
+if(MINGW)
+    set_property(TARGET RetroTransfer APPEND_STRING
+        PROPERTY LINK_FLAGS " -static")
+
+    set_property(TARGET RetroTransferSetupCLI APPEND_STRING
+        PROPERTY LINK_FLAGS " -static")
+
+    set_property(TARGET test_chunking APPEND_STRING
+        PROPERTY LINK_FLAGS " -static")
+endif()
+
+# ------------------------------------------
+# QT 6 GUI APPLICATION
+# ------------------------------------------
+
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+
+add_executable(RetroTransferGUI
+    gui/main_gui.cpp
+    gui/mainwindow.cpp
+    gui/mainwindow.h
+    ${RETRO_CORE_SOURCES}
+)
+
+target_link_libraries(RetroTransferGUI
+    PRIVATE Qt6::Widgets
+)
+
+add_dependencies(RetroTransferGUI RetroTransfer)
