@@ -6,6 +6,20 @@ Set-Location "C:\Users\Pratyush\Downloads\coding\RetroTransfer"
 .\build-ucrt64\RetroTransferSetupCLI.exe
 ```
 
+### Qt GUI launch
+```powershell
+Set-Location "C:\Users\Pratyush\Downloads\coding\RetroTransfer"
+$env:Path = "C:\msys64\ucrt64\bin;" + $env:Path
+.\build-qt6\RetroTransferGUI.exe
+```
+
+To rebuild the GUI, configure with the MSYS2 UCRT64 toolchain and Qt 6:
+
+```powershell
+Set-Location "C:\Users\Pratyush\Downloads\coding\RetroTransfer"
+& "C:\msys64\usr\bin\bash.exe" -lc 'export PATH=/ucrt64/bin:/usr/bin:$PATH; cmake -S /c/Users/Pratyush/Downloads/coding/RetroTransfer -B /c/Users/Pratyush/Downloads/coding/RetroTransfer/build-qt6 -G "Ninja" -DCMAKE_C_COMPILER=/ucrt64/bin/gcc.exe -DCMAKE_CXX_COMPILER=/ucrt64/bin/g++.exe -DCMAKE_PREFIX_PATH=/ucrt64; cmake --build /c/Users/Pratyush/Downloads/coding/RetroTransfer/build-qt6 --target RetroTransferGUI RetroTransfer --parallel'
+```
+
 Choose **3. Reconstruct or update a project** in the interactive menu. Enter
 the chunk manifest path, optionally enter the `.rtpack` path (leave it blank
 when the bundle is beside the manifest and has the recorded filename), then
