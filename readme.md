@@ -1,38 +1,52 @@
 # RetroTransfer
 
-### CLI launch
+## Build and run on Windows
+
+The Windows build uses CMake, Ninja, the MSYS2 UCRT64 C/C++ toolchain, and Qt 6
+with the Widgets and Network components. From the repository root in
+PowerShell, configure and build all application and test targets:
+
 ```powershell
-Set-Location "C:\Users\Pratyush\Downloads\coding\RetroTransfer"
-.\build-ucrt64\RetroTransferSetupCLI.exe
+$env:Path = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:Path"
+cmake -S . -B build-qt6 -G Ninja `
+  -DCMAKE_C_COMPILER="C:\msys64\ucrt64\bin\gcc.exe" `
+  -DCMAKE_CXX_COMPILER="C:\msys64\ucrt64\bin\g++.exe" `
+  -DCMAKE_PREFIX_PATH="C:\msys64\ucrt64"
+cmake --build build-qt6 --parallel
+ctest --test-dir build-qt6 --output-on-failure
 ```
 
-### Qt GUI launch
+Set the Qt runtime path when launching the GUI so Windows can find `Qt6Core.dll`
+and the other Qt DLLs:
+
 ```powershell
-Set-Location "C:\Users\Pratyush\Downloads\coding\RetroTransfer"
-$env:Path = "C:\msys64\ucrt64\bin;" + $env:Path
+$env:Path = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:Path"
 .\build-qt6\RetroTransferGUI.exe
 ```
 
-### TWO DEVICE launch (Test)
-127.0.0.1(for same device)
-```powershell
-$env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:PATH"
-$app = "C:\Users\Pratyush\Downloads\coding\RetroTransfer\build-qt6\RetroTransferGUI.exe"
-$dir = Split-Path $app
-Start-Process -FilePath $app -WorkingDirectory $dir
-Start-Process -FilePath $app -WorkingDirectory $dir
-```
-### To find ip (IPv4 Address)
-```powershell
-ipconfig
-```
+Launch the text-based setup menu with `.\build-qt6\RetroTransferSetupCLI.exe`,
+or the lower-level CLI with `.\build-qt6\RetroTransfer.exe`.
 
-To rebuild the GUI, configure with the MSYS2 UCRT64 toolchain and Qt 6:
+### Test a transfer on one computer
+
+Open PowerShell at the repository root, set the Qt runtime path, and start two
+GUI windows:
 
 ```powershell
-Set-Location "C:\Users\Pratyush\Downloads\coding\RetroTransfer"
-& "C:\msys64\usr\bin\bash.exe" -lc 'export PATH=/ucrt64/bin:/usr/bin:$PATH; cmake -S /c/Users/Pratyush/Downloads/coding/RetroTransfer -B /c/Users/Pratyush/Downloads/coding/RetroTransfer/build-qt6 -G "Ninja" -DCMAKE_C_COMPILER=/ucrt64/bin/gcc.exe -DCMAKE_CXX_COMPILER=/ucrt64/bin/g++.exe -DCMAKE_PREFIX_PATH=/ucrt64; cmake --build /c/Users/Pratyush/Downloads/coding/RetroTransfer/build-qt6 --target RetroTransferGUI RetroTransfer --parallel'
+$env:Path = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:Path"
+$app = (Resolve-Path .\build-qt6\RetroTransferGUI.exe).Path
+$workingDirectory = Split-Path $app
+Start-Process -FilePath $app -WorkingDirectory $workingDirectory
+Start-Process -FilePath $app -WorkingDirectory $workingDirectory
 ```
+
+In the first window, select **Receive from Sender**, choose a destination
+folder, and start the receiver. In the second, select **Send to Receiver** and
+use `127.0.0.1` as the receiver address. Select the scan JSON, chunk manifest,
+and `.rtpack` payload from the same package, then enter the receiver's port and
+pairing code. Use an empty destination folder for a full-package test. This
+checks the transfer on one machine; it does not test another device's network
+or firewall configuration.
 
 ### Send a package over the local network
 
@@ -48,8 +62,10 @@ Set-Location "C:\Users\Pratyush\Downloads\coding\RetroTransfer"
    three files and reconstructs the project in the selected destination.
    The console reports the folder where the received artifacts are retained.
 
-Both computers should be on a trusted LAN. Allow RetroTransfer through the
-receiver's firewall for the selected port if prompted. The pairing exchange
+For the receiver's LAN address, run `ipconfig` and use the IPv4 address for the
+active Wi-Fi or Ethernet adapter (not `127.0.0.1`). Both computers should be on
+the same trusted LAN. Allow RetroTransfer through the receiver's firewall for
+the selected port if prompted. The pairing exchange
 mutually authenticates the peers and binds the package sizes and SHA-256
 digests, but package contents are **not encrypted**; do not
 use this protocol on an untrusted network or expose its port to the internet.
@@ -60,59 +76,28 @@ Regenerating any of these files creates a different transfer and will not match
 those partial files. The current protocol limits scan JSON and manifests to
 256 MiB each and payloads to 64 GiB, and checks available disk space before receiving.
 
-Choose **3. Reconstruct or update a project** in the interactive menu. Enter
-the chunk manifest path, optionally enter the `.rtpack` path (leave it blank
-when the bundle is beside the manifest and has the recorded filename), then
-enter the destination folder. Choose an empty folder for a full package, or the
-matching baseline project folder to apply an incremental update.
-
-### Quick Build & Run (MinGW / UCRT64 + CMake)
+In the text-based setup menu, choose **3. Reconstruct or update a project**.
+Enter the chunk manifest path, optionally enter the `.rtpack` path (leave it
+blank when the bundle is beside the manifest and has the recorded filename),
+then enter the destination folder. Choose an empty folder for a full package,
+or the matching baseline project folder to apply an incremental update.
 
 ```powershell
-# Use the MSYS2 UCRT64 compiler and MinGW Make if they are installed:
-$env:Path = "C:\msys64\ucrt64\bin;C:\MinGW\bin;C:\Program Files\CMake\bin;$env:Path"
-```
-
-# Configure a fresh build directory and build
-
-```powershell
-cmake -S . -B build-ucrt64 -G "MinGW Makefiles" `
-  -DCMAKE_C_COMPILER="C:\msys64\ucrt64\bin\gcc.exe" `
-  -DCMAKE_CXX_COMPILER="C:\msys64\ucrt64\bin\g++.exe" `
-  -DCMAKE_MAKE_PROGRAM="C:\MinGW\bin\mingw32-make.exe"
-cmake --build build-ucrt64 --parallel
-```
-```powershell
-$env:PATH = 'C:\msys64\ucrt64\bin;C:\msys64\usr\bin;' + $env:PATH
-cmake --build build-ucrt64 --parallel
-```
-```powershell
-# Run project scan and adaptive chunking on current directory
-.\build-ucrt64\RetroTransfer.exe .
-```
-```powershell
-# Run automated test suite
-ctest --test-dir build-ucrt64 --output-on-failure
-```
-
-```powershell
-Set-Location "C:\Users\Pratyush\Downloads\coding\RetroTransfer"
-
 # Create a new, empty baseline folder
 $baseline = Join-Path $env:TEMP ("RetroTransfer-empty-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $baseline | Out-Null
 
-# Package the tennis game project
-.\build-ucrt64\RetroTransfer.exe "C:\Users\Pratyush\Downloads\coding\2d tennis game" `
+# Package a project
+.\build-qt6\RetroTransfer.exe "C:\Projects\MyProject" `
   --baseline $baseline `
-  --scan-output tennisGame-package-scan.json `
-  --chunks-output tennisGame-package-chunks.json `
-  --payload-output tennisGame-first.rtpack
+  --scan-output project-scan.json `
+  --chunks-output project-chunks.json `
+  --payload-output project.rtpack
 ```
-#Scan , chunk and compare
 
+### Scan, chunk, and compare project versions
 ```powershell
-.\build-ucrt64\RetroTransfer.exe "C:\Projects\MyProject-v2" `
+.\build-qt6\RetroTransfer.exe "C:\Projects\MyProject-v2" `
   --baseline "C:\Projects\MyProject-v1" `
   --scan-output v2-scan.json `
   --chunks-output v2-chunks.json `
@@ -125,13 +110,13 @@ For a complete package, use `--compress-all` when creating it, then reconstruct
 into a new or empty destination:
 
 ```powershell
-.\build-ucrt64\RetroTransfer.exe "C:\Projects\MyProject" `
+.\build-qt6\RetroTransfer.exe "C:\Projects\MyProject" `
   --compress-all `
   --scan-output project-scan.json `
   --chunks-output project-chunks.json `
   --payload-output project.rtpack
 
-.\build-ucrt64\RetroTransfer.exe --reconstruct collection\project-chunks.json `
+.\build-qt6\RetroTransfer.exe --reconstruct collection\project-chunks.json `
   --payload collection\project.rtpack `
   --output "C:\Projects\MyProject-restored"
 ```
@@ -143,7 +128,7 @@ overwrites files listed in the manifest. The same command updates an existing
 project folder in place:
 
 ```powershell
-.\build-ucrt64\RetroTransfer.exe --reconstruct collection\v2-chunks.json `
+.\build-qt6\RetroTransfer.exe --reconstruct collection\v2-chunks.json `
   --payload collection\v2-missing.rtpack `
   --output "C:\Projects\MyProject-receiver"
 ```
@@ -155,12 +140,12 @@ It validates chunk fingerprints and CRC32 values before committing files.
 
 The scan is saved as JSON in the `collection` folder by default:
 ```powershell
-.\build-ucrt64\RetroTransfer.exe "any directory"
+.\build-qt6\RetroTransfer.exe "any directory"
 ```
 
 To choose the scan and chunk manifest filenames independently, use:
 ```powershell
-.\build-ucrt64\RetroTransfer.exe "any directory" `
+.\build-qt6\RetroTransfer.exe "any directory" `
   --scan-output "project-scan.json" `
   --chunks-output "project-chunks.json"
 ```
@@ -363,54 +348,37 @@ Chunk-size arguments must be positive integers no larger than 1 GiB. Invalid or 
 
 ---
 
-## 9. Automated Testing
+## 9. Automated tests
 
-RetroTransfer includes a dedicated CTest suite covering chunking, scanning, adaptive policy, and compression behavior:
+The test sources are part of the project and are built and registered with CTest:
 
-```bash
-ctest --test-dir build --output-on-failure
-# or run executable directly:
-./build/test_chunking.exe
+- `ChunkingEngineTests` (`tests/test_chunking.cpp`) covers scanning, chunking,
+  fingerprints, adaptive strategy, codecs, compression, and reconstruction.
+- `TcpTransferIntegrationTests` (`tests/test_tcp_transfer.cpp`) covers pairing
+  rejection, transfer of scan JSON/manifest/payload, integrity checks,
+  interruption/resume, reconstruction, and receiver chunk-store reuse.
+
+Run both suites after building:
+
+```powershell
+ctest --test-dir build-qt6 --output-on-failure
 ```
 
-### Covered Test Cases:
-1. `test_empty_file` (0 bytes $\to$ 0 chunks, no empty chunk)
-2. `test_one_byte_file` (1 byte $\to$ 1 chunk of length 1)
-3. `test_smaller_than_chunk_size` (sub-chunk handling)
-4. `test_exact_chunk_size` (exact 1 chunk, no trailing chunk)
-5. `test_exactly_divisible_by_chunk_size` ($N \times \text{size} \to$ exactly $N$ chunks)
-6. `test_not_divisible_by_chunk_size` (accurate partial last chunk)
-7. `test_binary_data_embedded_nulls` (binary safety, embedded 0x00)
-8. `test_identical_files_produce_identical_fingerprints` (determinism)
-9. `test_changed_contents_produce_different_fingerprints` (checks that modified content changes the fingerprint)
-10. `test_correct_offsets_and_lengths` (accurate offset summation and byte reread)
-11. `test_cdc_min_chunk_size_behavior` (no chunk $< \text{minChunkSize}$ except EOF)
-12. `test_cdc_max_chunk_size_behavior` (no chunk $> \text{maxChunkSize}$)
-13. `test_cdc_deterministic_output` (CDC determinism across runs)
-14. `test_invalid_configurations` (error handling for invalid size configs)
-15. `test_missing_unreadable_file` (graceful error handling)
-16. `test_large_file_incremental` (1 MB streaming verification)
-17. `test_adaptive_mode_heuristics` (verifies rule tree for code, zip, and small files)
-18. `test_explicit_mode_overrides` (override flag verification)
-19. `test_cdc_content_boundaries_trigger` (ensures CDC finds content-defined cuts before max size and file/buffer paths agree)
-20. `test_scanner_skips_generated_dirs_and_symlinks` (avoids self-scanning generated data and symlink recursion)
-21. `test_payload_reread_and_byte_comparison` (rereads bytes and compares them directly)
-22. `test_version_comparison_metrics` (reusable bytes & reuse ratio calculation)
-23. `test_crc32_standard_vector` (validates the standard CRC32 result for `123456789`)
-24. `test_huffman_round_trip` (binary and empty-input Huffman encode/decode)
-25. `test_selective_codec_compression` (baseline reuse, per-chunk codec selection, and bundle decoding)
-26. `test_lzw_compression_reconstructs` (LZW selection, bundle decoding, and byte-for-byte reconstruction)
-27. `TcpTransferIntegrationTests` (pairing rejection, TCP transfer, interruption/resume, and persistent chunk-store reuse)
+Keep these test files: the CMake targets use them, and they catch regressions
+in the core pipeline and network transfer. The TCP integration test uses
+localhost and does not require a second computer.
 
 ---
 
 ## 10. Benchmark & Example Results
 
-Running `./RetroTransfer . scan.json --benchmark` prints a comparative summary. The following numbers are an illustrative example, not a performance guarantee; results depend on the project, hardware, and configuration:
+Running `RetroTransfer.exe . --benchmark` prints a comparative summary. The
+following numbers are an illustrative example, not a performance guarantee;
+results depend on the project, hardware, and configuration:
 
 ```
 ============================================================
-        RETROTRANSFER CHUNKING STRATEGY BENCHMARK           
+        RETROTRANSFER CHUNKING STRATEGY BENCHMARK
 ============================================================
 Strategy    Chunks    Unique FPs  Dedup %     Time (ms)     Throughput(MB/s)  Metadata (KB)   
 ------------------------------------------------------------------------------------

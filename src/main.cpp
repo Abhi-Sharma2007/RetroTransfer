@@ -969,7 +969,7 @@ int main(int argc, char* argv[])
                 std::cout << "- Fingerprinting\n";
                 std::cout << "- Compression Engine\n";
                 std::cout << "- Reconstruction Engine\n";
-                std::cout << "Networking: Planned for a future version\n";
+                std::cout << "Networking: TCP transfer available in the Qt GUI\n";
                 std::cout << "=========================================\n";
                 break;
 
