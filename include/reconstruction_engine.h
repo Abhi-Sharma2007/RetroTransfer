@@ -16,7 +16,8 @@ public:
                      const std::string& payloadPath,
                      const std::string& outputDirectory,
                      ReconstructionResult& result,
-                     std::string& error) const;
+                     std::string& error,
+                     const std::string& chunkStoreDirectory = {}) const;
 };
 
 #endif

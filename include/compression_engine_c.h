@@ -18,11 +18,18 @@ typedef struct {
     uint32_t crc32;
 } RtCompressionChunk;
 
+typedef enum {
+    RT_CODEC_RAW = 0,
+    RT_CODEC_HUFFMAN = 1,
+    RT_CODEC_RLE = 2,
+    RT_CODEC_LZW = 3
+} RtCompressionCodec;
+
 typedef struct {
     size_t current_index;
     uint64_t payload_offset;
     uint64_t stored_size;
-    int uses_huffman;
+    RtCompressionCodec codec;
 } RtCompressedChunk;
 
 typedef struct {
@@ -31,6 +38,8 @@ typedef struct {
     size_t missing_chunks;
     size_t duplicate_chunks;
     size_t huffman_chunks;
+    size_t rle_chunks;
+    size_t lzw_chunks;
     size_t stored_raw_chunks;
     uint64_t reusable_bytes;
     uint64_t duplicate_bytes_avoided;

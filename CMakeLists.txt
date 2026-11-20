@@ -78,17 +78,33 @@ endif()
 # QT 6 GUI APPLICATION
 # ------------------------------------------
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 
 add_executable(RetroTransferGUI
     gui/main_gui.cpp
     gui/mainwindow.cpp
     gui/mainwindow.h
+    gui/tcp_transfer.cpp
+    gui/tcp_transfer.h
     ${RETRO_CORE_SOURCES}
 )
 
 target_link_libraries(RetroTransferGUI
-    PRIVATE Qt6::Widgets
+    PRIVATE Qt6::Widgets Qt6::Network
 )
 
 add_dependencies(RetroTransferGUI RetroTransfer)
+
+add_executable(test_tcp_transfer
+    tests/test_tcp_transfer.cpp
+    gui/tcp_transfer.cpp
+    gui/tcp_transfer.h
+    ${RETRO_CORE_SOURCES}
+)
+
+target_include_directories(test_tcp_transfer PRIVATE gui)
+target_link_libraries(test_tcp_transfer
+    PRIVATE Qt6::Network
+)
+
+add_test(NAME TcpTransferIntegrationTests COMMAND test_tcp_transfer)

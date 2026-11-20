@@ -1,5 +1,6 @@
 
 #include "mainwindow.h"
+#include "tcp_transfer.h"
 
 #include <QWidget>
 #include <QVBoxLayout>
@@ -33,6 +34,12 @@
 #include <QRegularExpression>
 #include <QFont>
 #include <QColor>
+#include <QNetworkInterface>
+#include <QNetworkAddressEntry>
+#include <QRandomGenerator>
+#include <QStandardPaths>
+
+#include <algorithm>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -207,6 +214,7 @@ void addFieldIcon(QLineEdit *field, LineIcon icon)
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
 {
+    networkWorker = nullptr;
     setWindowTitle("RetroTransfer - Local File Transfer System");
     resize(1280, 820);
     setMinimumSize(1040, 700);
@@ -320,6 +328,8 @@ MainWindow::MainWindow(QWidget *parent)
     operationBox->addItem(lineIcon(LineIcon::Scan), "Scan and Chunk");
     operationBox->addItem(lineIcon(LineIcon::Compress), "Compress");
     operationBox->addItem(lineIcon(LineIcon::Reconstruct), "Reconstruct");
+    operationBox->addItem("Send to Receiver");
+    operationBox->addItem("Receive from Sender");
     operationCardLayout->addWidget(operationBox);
     leftLayout->addWidget(operationCard);
 
@@ -399,6 +409,9 @@ MainWindow::MainWindow(QWidget *parent)
     reconstructionLayout->addWidget(payloadLabel);
     reconstructionLayout->addLayout(payloadRow);
 
+    destinationWidget = new QWidget();
+    QVBoxLayout *destinationLayout = new QVBoxLayout(destinationWidget);
+    destinationLayout->setContentsMargins(0, 8, 0, 0);
     destinationLabel = new QLabel("Destination folder");
     destinationLabel->setObjectName("fieldLabel");
     destinationPath = new QLineEdit();
@@ -411,9 +424,69 @@ MainWindow::MainWindow(QWidget *parent)
     destinationRow->setSpacing(8);
     destinationRow->addWidget(destinationPath, 1);
     destinationRow->addWidget(browseDestinationButton);
-    reconstructionLayout->addWidget(destinationLabel);
-    reconstructionLayout->addLayout(destinationRow);
+    destinationLayout->addWidget(destinationLabel);
+    destinationLayout->addLayout(destinationRow);
     sourceLayout->addWidget(reconstructionWidget);
+    sourceLayout->addWidget(destinationWidget);
+
+    networkSendWidget = new QWidget();
+    QVBoxLayout *networkSendLayout = new QVBoxLayout(networkSendWidget);
+    networkSendLayout->setContentsMargins(0, 8, 0, 0);
+    QLabel *scanInputLabel = new QLabel("Existing scan JSON");
+    scanInputLabel->setObjectName("fieldLabel");
+    scanInputPath = new QLineEdit();
+    scanInputPath->setReadOnly(true);
+    scanInputPath->setPlaceholderText("Select the scan JSON created earlier");
+    addFieldIcon(scanInputPath, LineIcon::File);
+    browseScanInputButton = new QPushButton("Browse");
+    browseScanInputButton->setIcon(lineIcon(LineIcon::File));
+    QHBoxLayout *scanInputRow = new QHBoxLayout();
+    scanInputRow->setSpacing(8);
+    scanInputRow->addWidget(scanInputPath, 1);
+    scanInputRow->addWidget(browseScanInputButton);
+    QLabel *sendHostLabel = new QLabel("Receiver IP address");
+    sendHostLabel->setObjectName("fieldLabel");
+    sendHost = new QLineEdit();
+    sendHost->setPlaceholderText("For example, 192.168.1.25");
+    QLabel *sendPortLabel = new QLabel("Receiver TCP port");
+    sendPortLabel->setObjectName("fieldLabel");
+    sendPort = new QLineEdit("48321");
+    sendPort->setMaxLength(5);
+    QLabel *sendCodeLabel = new QLabel("One-time pairing code");
+    sendCodeLabel->setObjectName("fieldLabel");
+    sendPairingCode = new QLineEdit();
+    sendPairingCode->setMaxLength(16);
+    sendPairingCode->setPlaceholderText("Enter the 16-character code shown by the receiver");
+    networkSendLayout->addWidget(scanInputLabel);
+    networkSendLayout->addLayout(scanInputRow);
+    networkSendLayout->addWidget(sendHostLabel);
+    networkSendLayout->addWidget(sendHost);
+    networkSendLayout->addWidget(sendPortLabel);
+    networkSendLayout->addWidget(sendPort);
+    networkSendLayout->addWidget(sendCodeLabel);
+    networkSendLayout->addWidget(sendPairingCode);
+    sourceLayout->addWidget(networkSendWidget);
+
+    networkReceiveWidget = new QWidget();
+    QVBoxLayout *networkReceiveLayout = new QVBoxLayout(networkReceiveWidget);
+    networkReceiveLayout->setContentsMargins(0, 8, 0, 0);
+    QLabel *receivePortLabel = new QLabel("Listen on TCP port");
+    receivePortLabel->setObjectName("fieldLabel");
+    receivePort = new QLineEdit("48321");
+    receivePort->setMaxLength(5);
+    QLabel *receiveCodeLabel = new QLabel("One-time pairing code (16 characters)");
+    receiveCodeLabel->setObjectName("fieldLabel");
+    receivePairingCode = new QLineEdit();
+    receivePairingCode->setReadOnly(true);
+    receiveAddressLabel = new QLabel();
+    receiveAddressLabel->setObjectName("muted");
+    receiveAddressLabel->setWordWrap(true);
+    networkReceiveLayout->addWidget(receivePortLabel);
+    networkReceiveLayout->addWidget(receivePort);
+    networkReceiveLayout->addWidget(receiveCodeLabel);
+    networkReceiveLayout->addWidget(receivePairingCode);
+    networkReceiveLayout->addWidget(receiveAddressLabel);
+    sourceLayout->addWidget(networkReceiveWidget);
     leftLayout->addWidget(sourceCard);
 
     QVBoxLayout *strategyCardLayout = nullptr;
@@ -698,10 +771,21 @@ MainWindow::MainWindow(QWidget *parent)
     connect(browseDestinationButton, &QPushButton::clicked,
             this, &MainWindow::browseDestination);
 
+    connect(browseScanInputButton, &QPushButton::clicked,
+            this, &MainWindow::browseScanInput);
+
     connect(startButton, &QPushButton::clicked,
             this, &MainWindow::startTransfer);
 
     updateOperationFields();
+}
+
+MainWindow::~MainWindow()
+{
+    if (networkWorker && networkWorker->isRunning()) {
+        networkWorker->cancel();
+        networkWorker->wait();
+    }
 }
 
 void MainWindow::browseFolder()
@@ -754,6 +838,16 @@ void MainWindow::browseDestination()
     );
     if (!selectedFolder.isEmpty()) {
         destinationPath->setText(selectedFolder);
+    }
+}
+
+void MainWindow::browseScanInput()
+{
+    const QString selectedFile = QFileDialog::getOpenFileName(
+        this, "Select Existing Scan JSON", outputDirectory,
+        "JSON files (*.json)");
+    if (!selectedFile.isEmpty()) {
+        scanInputPath->setText(selectedFile);
     }
 }
 
@@ -851,16 +945,69 @@ void MainWindow::updateOperationFields()
     QString operation = operationBox->currentText();
     bool reconstruct = operation == "Reconstruct";
     bool compress = operation == "Compress";
+    bool sending = operation == "Send to Receiver";
+    bool receiving = operation == "Receive from Sender";
+    bool networkOperation = sending || receiving;
 
-    folderWidget->setVisible(!reconstruct);
+    folderWidget->setVisible(!reconstruct && !networkOperation);
     compressionWidget->setVisible(compress);
-    reconstructionWidget->setVisible(reconstruct);
-    strategyCard->setVisible(!reconstruct);
-    outputFilesCard->setVisible(!reconstruct);
-    scanChunkWidget->setVisible(!reconstruct);
+    reconstructionWidget->setVisible(reconstruct || sending);
+    destinationWidget->setVisible(reconstruct || receiving);
+    networkSendWidget->setVisible(sending);
+    networkReceiveWidget->setVisible(receiving);
+    strategyCard->setVisible(!reconstruct && !networkOperation);
+    outputFilesCard->setVisible(!reconstruct && !networkOperation);
+    scanChunkWidget->setVisible(!reconstruct && !networkOperation);
     payloadOutputWidget->setVisible(compress);
 
     folderPath->setPlaceholderText("Select the project to process");
+    manifestLabel->setText(sending ? "Chunk manifest (required)" : "Chunk manifest");
+    payloadLabel->setText(sending ? "Compressed payload (required)"
+                                  : "Payload (optional)");
+    payloadPath->setPlaceholderText(
+        sending ? "Select the .rtpack payload to send"
+                : "Uses the manifest's payload filename if blank");
+    destinationLabel->setText(receiving ? "Reconstruction destination folder"
+                                        : "Destination folder");
+
+    if (receiving && receivePairingCode->text().isEmpty()) {
+        receivePairingCode->setText(QString::number(
+            QRandomGenerator::system()->generate64(), 16).rightJustified(16, '0')
+                                         .toUpper());
+
+        QStringList addresses;
+        const auto interfaces = QNetworkInterface::allInterfaces();
+        for (const QNetworkInterface &networkInterface : interfaces) {
+            if (!(networkInterface.flags() & QNetworkInterface::IsUp) ||
+                !(networkInterface.flags() & QNetworkInterface::IsRunning) ||
+                (networkInterface.flags() & QNetworkInterface::IsLoopBack)) {
+                continue;
+            }
+            for (const QNetworkAddressEntry &entry :
+                 networkInterface.addressEntries()) {
+                if (entry.ip().protocol() == QAbstractSocket::IPv4Protocol &&
+                    !entry.ip().isLoopback()) {
+                    addresses.append(entry.ip().toString());
+                }
+            }
+        }
+        addresses.removeDuplicates();
+        receiveAddressLabel->setText(
+            addresses.isEmpty()
+                ? "No active LAN IPv4 address was found. Check the network connection."
+                : "Connect from the sender to one of these addresses: " +
+                      addresses.join(", "));
+    }
+
+    if (receiving) {
+        startButton->setText(networkWorker && networkWorker->isRunning()
+                                 ? "STOP LISTENING"
+                                 : "START RECEIVER");
+    } else if (sending) {
+        startButton->setText("SEND PACKAGE");
+    } else {
+        startButton->setText("START TRANSFER");
+    }
 
     if (useBaselineBox->isChecked()) {
         baselineLabel->setVisible(compress);
@@ -875,6 +1022,23 @@ void MainWindow::updateOperationFields()
 
 void MainWindow::startTransfer()
 {
+    if (networkWorker && networkWorker->isRunning()) {
+        if (operationBox->currentText() == "Receive from Sender") {
+            networkWorker->cancel();
+            startButton->setEnabled(false);
+            statusLabel->setText("[PROCESSING] Stopping receiver...");
+            appendConsoleOutput("PROCESSING", "Stopping the TCP receiver.");
+        }
+        return;
+    }
+
+    const QString selectedOperation = operationBox->currentText();
+    if (selectedOperation == "Send to Receiver" ||
+        selectedOperation == "Receive from Sender") {
+        startNetworkTransfer(selectedOperation == "Receive from Sender");
+        return;
+    }
+
     if (backendProcess->state() != QProcess::NotRunning) {
         return;
     }
@@ -982,4 +1146,162 @@ void MainWindow::startTransfer()
 
     backendProcess->setWorkingDirectory(outputDirectory);
     backendProcess->start(backendPath, arguments);
+}
+
+void MainWindow::startNetworkTransfer(bool receiving)
+{
+    auto rejectInput = [this](const QString &message) {
+        statusLabel->setText("[ERROR] " + message);
+        statusLabel->setStyleSheet("color: #F87171; font-weight: 600;");
+        appendConsoleOutput("ERROR", message);
+    };
+
+    bool portOk = false;
+    const QString portText = receiving ? receivePort->text().trimmed()
+                                       : sendPort->text().trimmed();
+    const uint port = portText.toUInt(&portOk);
+    if (!portOk || port == 0 || port > 65535) {
+        rejectInput("Enter a TCP port from 1 to 65535.");
+        return;
+    }
+
+    TcpTransferOptions options;
+    options.port = static_cast<quint16>(port);
+    if (receiving) {
+        if (destinationPath->text().isEmpty() ||
+            !QDir(destinationPath->text()).exists()) {
+            rejectInput("Select an existing reconstruction destination folder.");
+            return;
+        }
+        options.mode = TcpTransferOptions::Mode::ReceivePackage;
+        options.pairingCode = receivePairingCode->text();
+        options.destinationDirectory = destinationPath->text();
+        options.incomingDirectory =
+            QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+        if (options.incomingDirectory.isEmpty()) {
+            rejectInput("Could not determine a persistent application data folder.");
+            return;
+        }
+    } else {
+        if (sendHost->text().trimmed().isEmpty()) {
+            rejectInput("Enter the receiver's LAN IP address.");
+            return;
+        }
+        if (!QFileInfo(scanInputPath->text()).isFile() ||
+            !QFileInfo(manifestPath->text()).isFile() ||
+            !QFileInfo(payloadPath->text()).isFile()) {
+            rejectInput("Select an existing scan JSON, chunk manifest, and .rtpack payload.");
+            return;
+        }
+        if (!QRegularExpression("^[0-9A-Fa-f]{16}$")
+                 .match(sendPairingCode->text().trimmed()).hasMatch()) {
+            rejectInput("Enter the receiver's 16-character hexadecimal pairing code.");
+            return;
+        }
+        options.mode = TcpTransferOptions::Mode::SendPackage;
+        options.host = sendHost->text().trimmed();
+        options.pairingCode = sendPairingCode->text().trimmed();
+        options.scanPath = scanInputPath->text();
+        options.manifestPath = manifestPath->text();
+        options.payloadPath = payloadPath->text();
+    }
+
+    outputArea->clear();
+    appendConsoleOutput("PROCESSING",
+                        receiving ? "Starting the TCP receiver."
+                                  : "Preparing the package for TCP transfer.");
+    if (receiving) {
+        appendConsoleOutput("INFO", "Pairing code: " + options.pairingCode);
+        appendConsoleOutput("INFO",
+                            "Incoming partial packages are stored in the application data folder.");
+    } else {
+        appendConsoleOutput("INFO", "Receiver: " + options.host + ":" +
+                                        QString::number(options.port));
+        appendConsoleOutput("INFO", "Scan JSON: " + options.scanPath);
+        appendConsoleOutput("INFO", "Manifest: " + options.manifestPath);
+        appendConsoleOutput("INFO", "Payload: " + options.payloadPath);
+    }
+
+    statusLabel->setText(receiving ? "[PROCESSING] Waiting for a paired sender..."
+                                   : "[PROCESSING] Connecting to receiver...");
+    statusLabel->setStyleSheet("color: #38BDF8; font-weight: 600;");
+    progressBar->setRange(0, 0);
+    progressBar->setFormat(receiving ? "Waiting for sender" : "Connecting");
+
+    const bool receiverMode = receiving;
+    networkWorker = new TcpTransferWorker(
+        options, this,
+        [this](const QString &message) {
+            appendConsoleOutput("INFO", message);
+        },
+        [this](quint64 completed, quint64 total) {
+            if (total == 0) return;
+            const int percent = static_cast<int>(
+                (static_cast<long double>(completed) * 100.0L) /
+                static_cast<long double>(total));
+            progressBar->setRange(0, 100);
+            progressBar->setValue(std::min(percent, 100));
+            progressBar->setFormat("%p%");
+            statusLabel->setText(
+                QString("[PROCESSING] Transferring %1 of %2 bytes")
+                    .arg(static_cast<qulonglong>(completed))
+                    .arg(static_cast<qulonglong>(total)));
+        },
+        this);
+
+    setOperationControlsEnabled(false);
+    if (receiverMode) {
+        startButton->setEnabled(true);
+        startButton->setText("STOP LISTENING");
+    }
+    connect(networkWorker, &QThread::finished, this, [this, receiverMode]() {
+        const bool succeeded = networkWorker->succeeded();
+        const QString error = networkWorker->errorMessage();
+        const QString summary = networkWorker->summary();
+        networkWorker->deleteLater();
+        networkWorker = nullptr;
+
+        if (receiverMode) {
+            receivePairingCode->clear();
+        }
+        setOperationControlsEnabled(true);
+        updateOperationFields();
+        progressBar->setRange(0, 100);
+        if (succeeded) {
+            progressBar->setValue(100);
+            progressBar->setFormat("Complete");
+            statusLabel->setText("[SUCCESS] " + summary);
+            statusLabel->setStyleSheet("color: #4ADE80; font-weight: 600;");
+            appendConsoleOutput("SUCCESS", summary);
+        } else {
+            progressBar->setValue(0);
+            progressBar->setFormat("Stopped");
+            statusLabel->setText("[ERROR] " +
+                                 (error.isEmpty() ? "Network transfer failed." : error));
+            statusLabel->setStyleSheet("color: #F87171; font-weight: 600;");
+            appendConsoleOutput("ERROR",
+                                error.isEmpty() ? "Network transfer failed." : error);
+        }
+    });
+    networkWorker->start();
+}
+
+void MainWindow::setOperationControlsEnabled(bool enabled)
+{
+    startButton->setEnabled(enabled);
+    browseButton->setEnabled(enabled);
+    strategyBox->setEnabled(enabled);
+    browseBaselineButton->setEnabled(enabled);
+    browseManifestButton->setEnabled(enabled);
+    browsePayloadButton->setEnabled(enabled);
+    browseDestinationButton->setEnabled(enabled);
+    browseScanInputButton->setEnabled(enabled);
+    useBaselineBox->setEnabled(enabled);
+    operationBox->setEnabled(enabled);
+    sidebarWidget->setEnabled(enabled);
+    settingsButton->setEnabled(enabled);
+    sendHost->setEnabled(enabled);
+    sendPort->setEnabled(enabled);
+    sendPairingCode->setEnabled(enabled);
+    receivePort->setEnabled(enabled);
 }

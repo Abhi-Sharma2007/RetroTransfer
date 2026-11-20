@@ -5,6 +5,7 @@
 #include "huffman_codec_c.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdlib>
 #include <filesystem>
@@ -390,6 +391,125 @@ bool readFileBytes(const fs::path& path, std::string& contents, std::string& err
     return true;
 }
 
+bool decodeRle(const std::vector<uint8_t>& stored, uint64_t originalSize,
+               std::vector<uint8_t>& decoded, std::string& error) {
+    if (stored.size() % 2 != 0 ||
+        originalSize > std::numeric_limits<size_t>::max()) {
+        error = "RLE payload has an invalid size.";
+        return false;
+    }
+    decoded.resize(static_cast<size_t>(originalSize));
+    size_t outputPosition = 0;
+    for (size_t index = 0; index < stored.size(); index += 2) {
+        const size_t runLength = stored[index];
+        if (runLength == 0 || runLength > decoded.size() - outputPosition) {
+            error = "RLE payload contains an invalid run.";
+            return false;
+        }
+        std::fill(decoded.begin() + static_cast<std::ptrdiff_t>(outputPosition),
+                  decoded.begin() + static_cast<std::ptrdiff_t>(outputPosition + runLength),
+                  stored[index + 1]);
+        outputPosition += runLength;
+    }
+    if (outputPosition != decoded.size()) {
+        error = "RLE payload does not match the original chunk size.";
+        return false;
+    }
+    return true;
+}
+
+bool decodeLzw(const std::vector<uint8_t>& stored, uint64_t originalSize,
+               std::vector<uint8_t>& decoded, std::string& error) {
+    constexpr uint32_t dictionaryLimit = 65536;
+    if (stored.empty() || stored.size() % 2 != 0 ||
+        originalSize == 0 ||
+        originalSize > std::numeric_limits<size_t>::max()) {
+        error = "LZW payload has an invalid size.";
+        return false;
+    }
+
+    std::vector<uint16_t> prefixes(dictionaryLimit);
+    std::vector<uint8_t> suffixes(dictionaryLimit);
+    std::vector<uint8_t> stack(dictionaryLimit);
+    decoded.clear();
+    decoded.reserve(static_cast<size_t>(originalSize));
+
+    const auto readCode = [&stored](size_t position) {
+        return static_cast<uint16_t>(
+            (static_cast<uint16_t>(stored[position]) << 8) |
+            static_cast<uint16_t>(stored[position + 1]));
+    };
+    const auto expand = [&](uint32_t code, uint32_t nextCode,
+                            size_t& stackSize) {
+        stackSize = 0;
+        while (code >= 256) {
+            if (code >= nextCode || stackSize >= stack.size()) return false;
+            stack[stackSize++] = suffixes[code];
+            code = prefixes[code];
+        }
+        if (stackSize >= stack.size()) return false;
+        stack[stackSize++] = static_cast<uint8_t>(code);
+        return true;
+    };
+
+    uint32_t previousCode = readCode(0);
+    if (previousCode >= 256) {
+        error = "LZW payload does not begin with a literal byte.";
+        return false;
+    }
+    decoded.push_back(static_cast<uint8_t>(previousCode));
+    uint8_t previousFirst = static_cast<uint8_t>(previousCode);
+    uint32_t nextCode = 256;
+
+    for (size_t position = 2; position < stored.size(); position += 2) {
+        const uint32_t code = readCode(position);
+        size_t stackSize = 0;
+        uint8_t first = 0;
+        if (code < nextCode) {
+            if (!expand(code, nextCode, stackSize)) {
+                error = "LZW payload contains an invalid dictionary code.";
+                return false;
+            }
+            first = stack[stackSize - 1];
+        } else if (code == nextCode && nextCode < dictionaryLimit) {
+            if (!expand(previousCode, nextCode, stackSize)) {
+                error = "LZW payload contains an invalid previous code.";
+                return false;
+            }
+            first = previousFirst;
+        } else {
+            error = "LZW payload contains an out-of-range dictionary code.";
+            return false;
+        }
+
+        const size_t extraByte = code == nextCode ? 1 : 0;
+        const size_t expectedSize = static_cast<size_t>(originalSize);
+        if (decoded.size() > expectedSize ||
+            stackSize + extraByte > expectedSize - decoded.size()) {
+            error = "LZW payload expands beyond the declared chunk size.";
+            return false;
+        }
+        for (size_t index = stackSize; index > 0; --index) {
+            decoded.push_back(stack[index - 1]);
+        }
+        if (extraByte != 0) decoded.push_back(first);
+
+        if (nextCode < dictionaryLimit) {
+            prefixes[nextCode] = static_cast<uint16_t>(previousCode);
+            suffixes[nextCode] = first;
+            ++nextCode;
+        }
+        previousCode = code;
+        previousFirst = first;
+    }
+
+    if (decoded.size() != originalSize) {
+        error = "LZW payload does not match the original chunk size.";
+        return false;
+    }
+    return true;
+}
+
 bool readStoredChunk(std::ifstream& payload, const PayloadChunk& chunk,
                      std::vector<uint8_t>& decoded, std::string& error) {
     if (chunk.originalSize > kMaxChunkSizeBytes ||
@@ -434,6 +554,10 @@ bool readStoredChunk(std::ifstream& payload, const PayloadChunk& chunk,
         }
         if (outputSize != 0) decoded.assign(output, output + outputSize);
         std::free(output);
+    } else if (chunk.codec == "rle") {
+        if (!decodeRle(stored, chunk.originalSize, decoded, error)) return false;
+    } else if (chunk.codec == "lzw") {
+        if (!decodeLzw(stored, chunk.originalSize, decoded, error)) return false;
     } else {
         error = "Manifest specifies an unsupported payload codec: " + chunk.codec;
         return false;
@@ -461,6 +585,153 @@ bool readSourceChunk(const SourceChunk& source, std::vector<uint8_t>& bytes,
         return false;
     }
     return true;
+}
+
+fs::path chunkStorePath(const fs::path& directory, const std::string& fingerprint,
+                        uint64_t length, uint32_t crc32) {
+    return directory / (fingerprint + "-" + std::to_string(length) + "-" +
+                        std::to_string(crc32) + ".chunk");
+}
+
+bool readChunkStore(const fs::path& directory, const std::string& fingerprint,
+                    uint64_t length, uint32_t crc32,
+                    std::vector<uint8_t>& bytes, std::string& error) {
+    const fs::path path = chunkStorePath(directory, fingerprint, length, crc32);
+    std::error_code ec;
+    const fs::file_status status = fs::symlink_status(path, ec);
+    if (ec == std::errc::no_such_file_or_directory) return false;
+    if (ec) {
+        error = "Could not inspect stored chunk: " + ec.message();
+        return false;
+    }
+    if (!fs::exists(status)) return false;
+    if (fs::is_symlink(status) || !fs::is_regular_file(status)) {
+        error = "Stored chunk is not a regular file: " + path.string();
+        return false;
+    }
+    const uintmax_t size = fs::file_size(path, ec);
+    if (ec || size != length || size > kMaxChunkSizeBytes ||
+        size > std::numeric_limits<size_t>::max()) {
+        error = "Stored chunk has an invalid size: " + path.string();
+        return false;
+    }
+    std::ifstream input(path, std::ios::binary);
+    if (!input) {
+        error = "Could not open stored chunk: " + path.string();
+        return false;
+    }
+    bytes.resize(static_cast<size_t>(size));
+    if (size != 0) {
+        input.read(reinterpret_cast<char*>(bytes.data()),
+                   static_cast<std::streamsize>(size));
+        if (input.gcount() != static_cast<std::streamsize>(size) || input.bad()) {
+            error = "Could not read stored chunk: " + path.string();
+            return false;
+        }
+    }
+    char actualFingerprint[33] = {};
+    rt_compute_fingerprint_hex(bytes.data(), bytes.size(), 42, actualFingerprint);
+    if (fingerprint != actualFingerprint ||
+        rt_compute_crc32(bytes.data(), bytes.size()) != crc32) {
+        error = "Stored chunk failed fingerprint or CRC32 verification: " +
+                path.string();
+        return false;
+    }
+    return true;
+}
+
+bool writeChunkStore(const fs::path& directory, const std::string& fingerprint,
+                     uint64_t length, uint32_t crc32,
+                     const std::vector<uint8_t>& bytes, std::string& error) {
+    const fs::path path = chunkStorePath(directory, fingerprint, length, crc32);
+    std::error_code ec;
+    const fs::file_status status = fs::symlink_status(path, ec);
+    if (!ec && fs::exists(status)) {
+        std::vector<uint8_t> existing;
+        if (fs::is_symlink(status) || !fs::is_regular_file(status) ||
+            !readChunkStore(directory, fingerprint, length, crc32, existing, error) ||
+            existing != bytes) {
+            if (error.empty()) error = "Stored chunk key collision or invalid file.";
+            return false;
+        }
+        return true;
+    }
+    if (ec != std::errc::no_such_file_or_directory && ec) {
+        error = "Could not inspect stored chunk path: " + ec.message();
+        return false;
+    }
+
+    static std::atomic_uint64_t temporarySequence{0};
+    fs::path temporaryDirectory;
+    bool temporaryDirectoryCreated = false;
+    for (int attempt = 0; attempt < 100; ++attempt) {
+        temporaryDirectory = directory /
+            (".chunk-tmp-" +
+             std::to_string(temporarySequence.fetch_add(
+                 1, std::memory_order_relaxed)));
+        ec.clear();
+        if (fs::create_directory(temporaryDirectory, ec)) {
+            temporaryDirectoryCreated = true;
+            break;
+        }
+        if (ec && ec != std::errc::file_exists) {
+            error = "Could not create temporary chunk-store directory: " +
+                    ec.message();
+            return false;
+        }
+    }
+    if (!temporaryDirectoryCreated) {
+        error = "Could not allocate a unique temporary chunk-store directory.";
+        return false;
+    }
+    const fs::path temporary = temporaryDirectory / "chunk.tmp";
+    {
+        std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+        if (!output) {
+            fs::remove_all(temporaryDirectory, ec);
+            error = "Could not create persistent chunk file: " + temporary.string();
+            return false;
+        }
+        if (!bytes.empty()) {
+            output.write(reinterpret_cast<const char*>(bytes.data()),
+                         static_cast<std::streamsize>(bytes.size()));
+        }
+        output.close();
+        if (!output) {
+            fs::remove_all(temporaryDirectory, ec);
+            error = "Could not write persistent chunk file: " + temporary.string();
+            return false;
+        }
+    }
+    fs::rename(temporary, path, ec);
+    if (!ec) {
+        fs::remove_all(temporaryDirectory, ec);
+        if (ec) {
+            error = "Chunk was stored, but its temporary directory could not be removed: " +
+                    ec.message();
+            return false;
+        }
+        return true;
+    }
+
+    std::error_code inspectError;
+    const fs::file_status targetStatus = fs::symlink_status(path, inspectError);
+    if (!inspectError && fs::exists(targetStatus)) {
+        std::vector<uint8_t> existing;
+        const bool valid = !fs::is_symlink(targetStatus) &&
+            fs::is_regular_file(targetStatus) &&
+            readChunkStore(directory, fingerprint, length, crc32, existing, error) &&
+            existing == bytes;
+        std::error_code removeError;
+        fs::remove_all(temporaryDirectory, removeError);
+        if (valid) return true;
+        if (error.empty()) error = "Stored chunk key collision or invalid file.";
+        return false;
+    }
+    std::error_code removeError;
+    fs::remove_all(temporaryDirectory, removeError);
+    error = "Could not persist chunk: " + ec.message();
+    return false;
 }
 
 bool validateOutputDirectory(const fs::path& output, std::string& error) {
@@ -511,7 +782,8 @@ bool ReconstructionEngine::reconstruct(const std::string& manifestPath,
                                        const std::string& payloadPath,
                                        const std::string& outputDirectory,
                                        ReconstructionResult& result,
-                                       std::string& error) const {
+                                       std::string& error,
+                                       const std::string& chunkStoreDirectory) const {
     result = {};
     error.clear();
 
@@ -558,7 +830,8 @@ bool ReconstructionEngine::reconstruct(const std::string& manifestPath,
             chunk.crc32 = parseCrc32(entry, "crc32");
             chunk.codec = requiredString(entry, "codec");
             if (!parseFingerprint(chunk.fingerprint) ||
-                (chunk.codec != "raw" && chunk.codec != "huffman")) {
+                (chunk.codec != "raw" && chunk.codec != "huffman" &&
+                 chunk.codec != "rle" && chunk.codec != "lzw")) {
                 throw std::runtime_error("Manifest contains invalid payload chunk metadata.");
             }
             const std::string key =
@@ -667,6 +940,23 @@ bool ReconstructionEngine::reconstruct(const std::string& manifestPath,
         const fs::path outputRoot = fs::absolute(outputDirectory).lexically_normal();
         if (!validateOutputDirectory(outputRoot, error)) return false;
 
+        fs::path chunkStoreRoot;
+        if (!chunkStoreDirectory.empty()) {
+            chunkStoreRoot = fs::absolute(chunkStoreDirectory).lexically_normal();
+            fs::create_directories(chunkStoreRoot, ec);
+            if (ec) {
+                throw std::runtime_error("Could not create persistent chunk store: " +
+                                         ec.message());
+            }
+            const fs::file_status storeStatus =
+                fs::symlink_status(chunkStoreRoot, ec);
+            if (ec || fs::is_symlink(storeStatus) ||
+                !fs::is_directory(storeStatus)) {
+                throw std::runtime_error(
+                    "Persistent chunk store must be a real directory, not a symlink.");
+            }
+        }
+
         std::unordered_map<std::string, SourceChunk> availableChunks;
         ProjectScanner scanner(outputRoot.string());
         ChunkEngine engine(config);
@@ -720,23 +1010,37 @@ bool ReconstructionEngine::reconstruct(const std::string& manifestPath,
                     }
                     ++writtenChunkCount;
                 } else {
-                    const auto source = availableChunks.find(key);
-                    if (source == availableChunks.end() ||
-                        source->second.crc32 != recipe.crc32) {
-                        throw std::runtime_error(
-                            "Missing chunk is neither in the payload nor in the destination: " +
-                            recipe.fingerprint);
+                    bool foundInStore = false;
+                    if (!chunkStoreRoot.empty()) {
+                        foundInStore = readChunkStore(
+                            chunkStoreRoot, recipe.fingerprint, recipe.length,
+                            recipe.crc32, bytes, error);
+                        if (!foundInStore && !error.empty()) {
+                            throw std::runtime_error(error);
+                        }
                     }
-                    std::string readError;
-                    if (!readSourceChunk(source->second, bytes, readError)) {
-                        throw std::runtime_error(readError);
+                    if (foundInStore) {
+                        ++reusableCount;
+                    } else {
+                        const auto source = availableChunks.find(key);
+                        if (source == availableChunks.end() ||
+                            source->second.crc32 != recipe.crc32) {
+                            throw std::runtime_error(
+                                "Missing chunk is neither in the payload, persistent chunk store, "
+                                "nor destination: " + recipe.fingerprint);
+                        }
+                        std::string readError;
+                        if (!readSourceChunk(source->second, bytes, readError)) {
+                            throw std::runtime_error(readError);
+                        }
+                        char fingerprint[33] = {};
+                        rt_compute_fingerprint_hex(bytes.data(), bytes.size(), 42, fingerprint);
+                        if (recipe.fingerprint != fingerprint) {
+                            throw std::runtime_error(
+                                "Reusable chunk fingerprint verification failed.");
+                        }
+                        ++reusableCount;
                     }
-                    char fingerprint[33] = {};
-                    rt_compute_fingerprint_hex(bytes.data(), bytes.size(), 42, fingerprint);
-                    if (recipe.fingerprint != fingerprint) {
-                        throw std::runtime_error("Reusable chunk fingerprint verification failed.");
-                    }
-                    ++reusableCount;
                 }
                 if (bytes.size() != recipe.length ||
                     rt_compute_crc32(bytes.data(), bytes.size()) != recipe.crc32) {
@@ -746,6 +1050,11 @@ bool ReconstructionEngine::reconstruct(const std::string& manifestPath,
                 rt_compute_fingerprint_hex(bytes.data(), bytes.size(), 42, fingerprint);
                 if (recipe.fingerprint != fingerprint) {
                     throw std::runtime_error("Reconstructed chunk failed fingerprint verification.");
+                }
+                if (!chunkStoreRoot.empty() &&
+                    !writeChunkStore(chunkStoreRoot, recipe.fingerprint,
+                                     recipe.length, recipe.crc32, bytes, error)) {
+                    throw std::runtime_error(error);
                 }
                 if (!bytes.empty()) {
                     output.write(reinterpret_cast<const char*>(bytes.data()),

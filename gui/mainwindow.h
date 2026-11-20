@@ -14,11 +14,13 @@ class QProgressBar;
 class QProcess;
 class QCheckBox;
 class QToolButton;
+class TcpTransferWorker;
 
 class MainWindow : public QMainWindow
 {
 public:
     explicit MainWindow(QWidget *parent = nullptr);
+    ~MainWindow() override;
 
 private:
     QLineEdit *folderPath;
@@ -29,6 +31,12 @@ private:
     QLineEdit *scanOutputName;
     QLineEdit *chunksOutputName;
     QLineEdit *payloadOutputName;
+    QLineEdit *scanInputPath;
+    QLineEdit *sendHost;
+    QLineEdit *sendPort;
+    QLineEdit *sendPairingCode;
+    QLineEdit *receivePort;
+    QLineEdit *receivePairingCode;
     QComboBox *strategyBox;
     QComboBox *operationBox;
     QCheckBox *useBaselineBox;
@@ -37,6 +45,7 @@ private:
     QPushButton *browseManifestButton;
     QPushButton *browsePayloadButton;
     QPushButton *browseDestinationButton;
+    QPushButton *browseScanInputButton;
     QPushButton *startButton;
     QLabel *statusLabel;
     QLabel *baselineLabel;
@@ -47,12 +56,16 @@ private:
     QLabel *chunksOutputLabel;
     QLabel *payloadOutputLabel;
     QLabel *outputDirectoryLabel;
+    QLabel *receiveAddressLabel;
     QTextEdit *outputArea;
     QProgressBar *progressBar;
     QWidget *scanChunkWidget;
     QWidget *payloadOutputWidget;
     QWidget *compressionWidget;
     QWidget *reconstructionWidget;
+    QWidget *destinationWidget;
+    QWidget *networkSendWidget;
+    QWidget *networkReceiveWidget;
     QWidget *folderWidget;
     QWidget *sidebarWidget;
     QWidget *sourceCard;
@@ -61,6 +74,7 @@ private:
     QToolButton *settingsButton;
 
     QProcess *backendProcess;
+    TcpTransferWorker *networkWorker;
     QString outputDirectory;
 
     void browseFolder();
@@ -68,10 +82,13 @@ private:
     void browseManifest();
     void browsePayload();
     void browseDestination();
+    void browseScanInput();
     void updateOperationFields();
     void showSettingsDialog();
     void appendConsoleOutput(const QString &tag, const QString &text);
     void startTransfer();
+    void startNetworkTransfer(bool receiving);
+    void setOperationControlsEnabled(bool enabled);
 };
 
 #endif

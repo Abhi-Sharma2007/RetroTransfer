@@ -13,12 +13,52 @@ $env:Path = "C:\msys64\ucrt64\bin;" + $env:Path
 .\build-qt6\RetroTransferGUI.exe
 ```
 
+### TWO DEVICE launch (Test)
+127.0.0.1(for same device)
+```powershell
+$env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:PATH"
+$app = "C:\Users\Pratyush\Downloads\coding\RetroTransfer\build-qt6\RetroTransferGUI.exe"
+$dir = Split-Path $app
+Start-Process -FilePath $app -WorkingDirectory $dir
+Start-Process -FilePath $app -WorkingDirectory $dir
+```
+### To find ip (IPv4 Address)
+```powershell
+ipconfig
+```
+
 To rebuild the GUI, configure with the MSYS2 UCRT64 toolchain and Qt 6:
 
 ```powershell
 Set-Location "C:\Users\Pratyush\Downloads\coding\RetroTransfer"
 & "C:\msys64\usr\bin\bash.exe" -lc 'export PATH=/ucrt64/bin:/usr/bin:$PATH; cmake -S /c/Users/Pratyush/Downloads/coding/RetroTransfer -B /c/Users/Pratyush/Downloads/coding/RetroTransfer/build-qt6 -G "Ninja" -DCMAKE_C_COMPILER=/ucrt64/bin/gcc.exe -DCMAKE_CXX_COMPILER=/ucrt64/bin/g++.exe -DCMAKE_PREFIX_PATH=/ucrt64; cmake --build /c/Users/Pratyush/Downloads/coding/RetroTransfer/build-qt6 --target RetroTransferGUI RetroTransfer --parallel'
 ```
+
+### Send a package over the local network
+
+1. On the sender, choose **Scan** and **Compress** to create the scan JSON,
+   chunk manifest, and `.rtpack` payload. Use **Compress all** for a complete
+   project package or select a baseline for an incremental package.
+2. On the receiver, choose **Receive from Sender**, select the destination
+   folder, and click **START RECEIVER**. Share the displayed LAN IPv4 address,
+   TCP port (default `48321`), and 16-character hexadecimal pairing code with the sender.
+3. On the sender, choose **Send to Receiver** and select the existing scan
+   JSON, chunk manifest, and `.rtpack` payload. Enter the receiver's address,
+   port, and code, then click **SEND PACKAGE**. The receiver verifies all
+   three files and reconstructs the project in the selected destination.
+   The console reports the folder where the received artifacts are retained.
+
+Both computers should be on a trusted LAN. Allow RetroTransfer through the
+receiver's firewall for the selected port if prompted. The pairing exchange
+mutually authenticates the peers and binds the package sizes and SHA-256
+digests, but package contents are **not encrypted**; do not
+use this protocol on an untrusted network or expose its port to the internet.
+The receiver accepts one package at a time. Interrupted transfers retain
+verified blocks in the application data directory and can resume when the
+sender retries the exact same scan JSON, manifest, and payload files.
+Regenerating any of these files creates a different transfer and will not match
+those partial files. The current protocol limits scan JSON and manifests to
+256 MiB each and payloads to 64 GiB, and checks available disk space before receiving.
 
 Choose **3. Reconstruct or update a project** in the interactive menu. Enter
 the chunk manifest path, optionally enter the `.rtpack` path (leave it blank
@@ -138,7 +178,7 @@ offsets and codecs.
 
 ## 1. Project Overview
 
-**RetroTransfer** reduces redundant data in evolving projects. It scans and chunks a current project, can compare its chunks with a locally available baseline project, and writes a bundle containing only missing chunks. The receiver can reconstruct or update a project directory from the JSON recipe and RTPK payload, reusing verified chunks already present there. MurmurHash3, CRC32, canonical Huffman coding, and selective compression/deduplication are implemented in C. The C++ application calls the C hashing and Huffman APIs directly; a C++ facade remains for integration with the compression engine. Missing chunks are encoded with canonical Huffman coding when that makes them smaller; otherwise they are stored raw. Network transfer and persistent receiver storage are not implemented.
+**RetroTransfer** reduces redundant data in evolving projects. It scans and chunks a current project, can compare its chunks with a locally available baseline project, and writes a bundle containing only missing chunks. The receiver can reconstruct or update a project directory from the JSON recipe and RTPK payload, reusing verified chunks already present there. The GUI can transfer packages over TCP using a one-time pairing code, block acknowledgements, SHA-256 package verification, and resumable partial package files. MurmurHash3, CRC32, Huffman, RLE, LZW, and selective compression/deduplication are implemented. The per-chunk codec selector chooses the smallest encoded representation among the supported codecs and raw storage. The network receiver persists verified content-addressed chunks for later incremental packages.
 
 ### System Pipeline Roadmap
 
@@ -147,16 +187,16 @@ flowchart LR
     A["Project Scanner<br/>(Implemented)"] --> B["Chunking Engine<br/>(Implemented)"]
     B --> C["Fingerprinting<br/>(Implemented)"]
     C --> D["Local Baseline Deduplication<br/>(Implemented - hash lookup + byte verification)"]
-    D --> E["Selective Compression<br/>(Implemented - Huffman)"]
+    D --> E["Selective Compression<br/>(Implemented - RLE / Huffman / LZW / raw selector)"]
     E --> F["Payload Bundle + Manifest<br/>(Implemented)"]
-    F --> G["TCP Socket Transfer<br/>(Planned - Winsock/POSIX)"]
+    F --> G["TCP Socket Transfer<br/>(Implemented in GUI - Qt Network)"]
     F --> H["Reconstruction & Verification<br/>(Implemented - CRC32 + fingerprint)"]
 ```
 
 > [!NOTE]
-> Stages currently implemented: **Project Scanner**, **Chunking Engine** (Fixed & CDC), **Chunk Fingerprinting** (MurmurHash3 128-bit & CRC32), **Workload-Aware Adaptive Chunking**, **local baseline comparison with byte verification**, **per-chunk Huffman compression with raw fallback**, and **a local payload bundle plus JSON manifest**.
-> Stages not implemented: persistent receiver chunk storage, TCP/local-network transfer, and resumable transfer.
-> MurmurHash3, CRC32, Huffman coding, and selective compression/deduplication are implemented in C. Chunking, scanning, CLI orchestration, and the application-facing compression facade remain in C++.
+> Stages currently implemented: **Project Scanner**, **Chunking Engine** (Fixed & CDC), **Chunk Fingerprinting** (MurmurHash3 128-bit & CRC32), **Workload-Aware Adaptive Chunking**, **local baseline comparison with byte verification**, **per-chunk RLE/Huffman/LZW/raw selection**, **local payload bundle and JSON manifest**, **GUI TCP package transfer**, **receiver pairing**, **block acknowledgements**, **resumable incoming scan/manifest/payload files**, **persistent receiver chunk storage**, and **reconstruction after transfer**.
+> Remaining milestone: end-to-end research evaluation across versioned workloads. The current transport is not encrypted and is intended for trusted LAN use only. Alternate RLE/LZW encoding is bounded to input chunks up to 64 MiB; larger chunks compare Huffman with raw storage.
+> MurmurHash3, CRC32, Huffman, RLE, LZW, and selective compression/deduplication are implemented in C. Chunking, scanning, CLI orchestration, and the application-facing compression facade remain in C++.
 
 ---
 
@@ -176,7 +216,7 @@ flowchart TD
     Stream2 --> FP
     FP --> Meta["ChunkMetadata Vector & Performance Metrics"]
     Meta --> Compare["Compare against local baseline fingerprints + bytes"]
-    Compare -->|Missing chunks only| Huffman["Canonical Huffman, raw fallback"]
+    Compare -->|Missing chunks only| Huffman["Smallest of RLE / Huffman / LZW / raw"]
     Compare -->|Already available| Reuse["Record as reusable; do not store again"]
     Huffman --> Bundle["Local RTPK payload bundle + JSON manifest"]
 ```
@@ -268,14 +308,14 @@ Pass `--baseline <folder>` to simulate the receiver having an earlier project co
 2. Confirms candidate matches by comparing the actual bytes.
 3. Marks exact matches reusable and does not write them to the payload.
 4. Checks missing chunks against earlier missing chunks in this project and stores repeated data only once.
-5. Huffman-encodes unique missing chunks; if the encoded form is not smaller, stores that chunk raw instead.
+5. Measures RLE, canonical Huffman, and LZW output sizes for unique missing chunks up to 64 MiB; stores the smallest result, falling back to raw bytes when none is smaller. Larger chunks compare Huffman with raw storage.
 6. Writes a local `.rtpack` file and adds each payload offset, codec, fingerprint, source offset, and size to the chunk JSON manifest.
 
 For a first package with no older copy, use `--compress-all` instead of `--baseline`. This treats every current chunk as missing and packages each unique chunk once. The interactive UI offers this choice when you select compression.
 
-This is **local selective packaging**, not network transfer. The baseline is rescanned on every run; no persistent receiver index is written. The current file/chunk manifest still describes all current chunks, while `selectiveCompression.payloadChunks` lists only unique missing payload entries. Metrics distinguish chunks missing from the baseline (`missingChunks`) from repeated current-project chunks omitted from storage (`duplicateChunks`). `compressionBytesSaved` measures savings from encoding unique missing input; `totalBytesAvoided` compares all current source bytes with the actual payload plus its header. The RTPK file is a temporary hand-off artifact for the future transfer stage; there is not yet a receiver-side decoder or reconstruction command.
+This is **local selective packaging**: the sender's baseline is rescanned on every run. The current file/chunk manifest still describes all current chunks, while `selectiveCompression.payloadChunks` lists only unique missing payload entries. Metrics distinguish chunks missing from the baseline (`missingChunks`) from repeated current-project chunks omitted from storage (`duplicateChunks`). `compressionBytesSaved` measures savings from encoding unique missing input; `totalBytesAvoided` compares all current source bytes with the actual payload plus its header. The network receiver persists verified chunks separately for reuse by later incremental packages. The RTPK artifact can be transferred using the GUI's Send/Receive operations or reconstructed locally with the CLI.
 
-The Huffman codec stores a canonical code-length table for each encoded chunk. Chunk payloads that cannot be reduced are stored raw. Huffman is lossless; tests exercise the codec decoder to verify round-trips, but a project-level restore feature is not yet provided.
+Huffman stores a canonical code-length table per encoded chunk. RLE stores count/value pairs, and LZW stores 16-bit dictionary codes. All codecs are lossless; the manifest records the selected codec for each chunk so the reconstruction engine can decode it.
 
 ---
 
@@ -358,7 +398,9 @@ ctest --test-dir build --output-on-failure
 22. `test_version_comparison_metrics` (reusable bytes & reuse ratio calculation)
 23. `test_crc32_standard_vector` (validates the standard CRC32 result for `123456789`)
 24. `test_huffman_round_trip` (binary and empty-input Huffman encode/decode)
-25. `test_selective_huffman_compression` (baseline reuse, missing chunk selection, bundle read and Huffman round-trip)
+25. `test_selective_codec_compression` (baseline reuse, per-chunk codec selection, and bundle decoding)
+26. `test_lzw_compression_reconstructs` (LZW selection, bundle decoding, and byte-for-byte reconstruction)
+27. `TcpTransferIntegrationTests` (pairing rejection, TCP transfer, interruption/resume, and persistent chunk-store reuse)
 
 ---
 
@@ -381,7 +423,7 @@ adaptive    23        23          0.0%        9.73          11.29             3
 Output manifests:
 - `collection/scan.json`: Directory hierarchy (unchanged scanner output format)
 - `collection/scan_chunks.json`: Full chunk manifest, fingerprints, adaptive rationale, and metrics
-- `collection/scan_payload.rtpack`: Created with `--baseline` or `--compress-all`; contains missing chunk bytes, Huffman-coded where smaller and raw otherwise
+- `collection/scan_payload.rtpack`: Created with `--baseline` or `--compress-all`; contains missing chunk bytes encoded with the smallest supported per-chunk codec
 
 ---
 
@@ -389,11 +431,9 @@ Output manifests:
 
 ### Current Limitations:
 - The adaptive policy currently uses file extension and size heuristics; it does not yet profile runtime Shannon entropy per block.
-- Baseline chunks are rescanned for each run; there is no persistent receiver chunk index.
-- The bundle and manifest are local artifacts only. Network transfer, resume, and persistent receiver chunk storage are not implemented.
-- Compression is per chunk and currently uses canonical Huffman coding with raw fallback. RLE/LZW and a measured algorithm selector are not implemented.
+- Sender baseline chunks are rescanned for each package. On the receiver, verified chunks are persisted in a content-addressed store; destination files are still scanned as a fallback for older chunks.
+- TCP transfer is currently available in the Qt GUI, not the CLI. Incoming package files are persistent and resumable, and verified chunks are kept in a content-addressed receiver store. The destination project is still scanned during reconstruction to find reusable chunks that were not already in that store.
+- The benchmark covers local chunking strategies; end-to-end transfer/recovery and codec comparisons across versioned workloads remain to be evaluated.
 
 ### Recommended Next Steps for Deduplication Stage:
-1. **Persistent receiver index**: Store receiver chunk fingerprints and locations between runs instead of rescanning the baseline folder.
-2. **Transfer protocol**: Send the manifest and RTPK payload over local Wi-Fi/LAN, with acknowledgement and resume support.
-3. **Transfer protocol**: Deliver the manifest and RTPK payload to the receiver with acknowledgement and resume support.
+1. **Research evaluation**: Measure deduplication, compression, transfer throughput, interruption recovery, and reconstruction across versioned project workloads.

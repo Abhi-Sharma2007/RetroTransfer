@@ -257,12 +257,14 @@ static void writeChunkManifestJson(std::ofstream& out,
             << "\",\n";
         out << "    \"payloadFile\": \"" << jsonEscape(payloadName) << "\",\n";
         out << "    \"payloadFormat\": \"RTPK-v1\",\n";
-        out << "    \"codec\": \"canonical-huffman-per-chunk-with-raw-fallback\",\n";
+        out << "    \"codec\": \"smallest-of-rle-huffman-lzw-raw-per-chunk\",\n";
         out << "    \"totalChunks\": " << metrics.totalChunks << ",\n";
         out << "    \"reusableChunks\": " << metrics.reusableChunks << ",\n";
         out << "    \"missingChunks\": " << metrics.missingChunks << ",\n";
         out << "    \"duplicateChunks\": " << metrics.duplicateChunks << ",\n";
         out << "    \"huffmanChunks\": " << metrics.huffmanChunks << ",\n";
+        out << "    \"rleChunks\": " << metrics.rleChunks << ",\n";
+        out << "    \"lzwChunks\": " << metrics.lzwChunks << ",\n";
         out << "    \"rawChunks\": " << metrics.storedRawChunks << ",\n";
         out << "    \"reusableBytes\": " << metrics.reusableBytes << ",\n";
         out << "    \"duplicateBytesAvoided\": "
@@ -739,7 +741,9 @@ int runBackend(int argc, char* argv[]){
             std::cout << "Missing chunks     : " << metrics.missingChunks << "\n";
             std::cout << "Repeated missing   : " << metrics.duplicateChunks
                       << " (" << metrics.duplicateBytesAvoided << " bytes omitted)\n";
-            std::cout << "Huffman / raw      : " << metrics.huffmanChunks << " / "
+            std::cout << "Huffman / RLE / LZW / raw: "
+                      << metrics.huffmanChunks << " / " << metrics.rleChunks
+                      << " / " << metrics.lzwChunks << " / "
                       << metrics.storedRawChunks << "\n";
             std::cout << "Compression saved  : "
                       << metrics.compressionBytesSaved << " bytes\n";
